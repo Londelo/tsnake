@@ -101,8 +101,9 @@ static int snake_contains(Snake *s, Point p, int skip_tail) {
 static void game_init(Game *g) {
     memset(g, 0, sizeof(*g));
     snake_init(&g->snake);
+    /* push tail-first so the last cell pushed is the head at `start` */
     Point start = { BOARD_W / 4, BOARD_H / 2 };
-    for (int i = 0; i < 3; i++) {
+    for (int i = 2; i >= 0; i--) {
         Point seg = { start.x - i, start.y };
         snake_push(&g->snake, seg);
     }
@@ -198,7 +199,7 @@ static void draw(Game *g, int highscore) {
     if (g->wrap) printw("  [w]rap: on");
     if (g->paused) printw("  PAUSED");
 
-    mvprintw(BOARD_H + 3, 2, "arrows/wasd move · w wrap · p pause · r restart · q quit");
+    mvprintw(BOARD_H + 3, 2, "arrows/wasd/vim move · x wrap · p pause · r restart · q quit");
 
     /* food */
     if (has_colors()) attron(COLOR_PAIR(1));
@@ -240,15 +241,15 @@ static int handle_key(Game *g, int ch) {
         case 'p': case 'P': case ' ':
             g->paused = !g->paused;
             break;
-        case 'w': case 'W':
+        case 'x': case 'X':
             g->wrap = !g->wrap;
             break;
         case 'r': case 'R':
             game_init(g);
             break;
-        case KEY_UP: case 'k': case 'K':
+        case KEY_UP: case 'k': case 'K': case 'w': case 'W':
             queue_direction(g, 0, -1); break;
-        case KEY_DOWN: case 'j': case 'J':
+        case KEY_DOWN: case 'j': case 'J': case 's': case 'S':
             queue_direction(g, 0, 1); break;
         case KEY_LEFT: case 'h': case 'H':
             queue_direction(g, -1, 0); break;

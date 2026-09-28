@@ -15,9 +15,9 @@ Requires `ncurses` dev headers (`sudo pacman -S ncurses` on Arch — usually alr
 
 | Key | Action |
 |---|---|
-| Arrows / WASD (vim-style h/j/k/l too) | Steer |
+| Arrows / WASD / vim (h/j/k/l) | Steer |
 | `p` or space | Pause |
-| `w` | Toggle wrap-around walls |
+| `x` | Toggle wrap-around walls |
 | `r` | Restart |
 | `q` | Quit |
 
