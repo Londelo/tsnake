@@ -52,6 +52,7 @@ typedef struct {
     int alive;
     int paused;
     int wrap;
+    int hunt;              /* auto-hunt mode: AI steers to nearest food */
 } Game;
 
 static int rng(int limit) {
@@ -194,8 +195,117 @@ static void advance_one(Game *g) {
     }
 }
 
+/* ---- auto-hunt: multi-source BFS from all food to the head ---- */
+
+#define MAX_BOARD_W 200   /* guard rails for the BFS scratch arrays */
+#define MAX_BOARD_H 120
+
+/* fills an occupancy grid from the snake body (O(len) once, O(1) lookups) */
+static void fill_occupancy(Game *g, unsigned char *occ, int w, int h) {
+    memset(occ, 0, (size_t)w * h);
+    for (int i = 0; i < g->snake.len; i++) {
+        int idx = (g->snake.head - i + MAX_SNAKE) % MAX_SNAKE;
+        Point p = g->snake.cells[idx];
+        if (p.x >= 0 && p.x < w && p.y >= 0 && p.y < h) occ[p.y * w + p.x] = 1;
+    }
+}
+
+static const int HUNT_DX[4] = {1, -1, 0, 0};
+static const int HUNT_DY[4] = {0, 0, 1, -1};
+
+/* wraps or bounds-checks one step from p along d; returns 0 if it dies */
+static int hunt_next_cell(Game *g, Point p, int dx, int dy, Point *out) {
+    out->x = p.x + dx;
+    out->y = p.y + dy;
+    if (g->wrap) {
+        out->x = (out->x + BOARD_W) % BOARD_W;
+        out->y = (out->y + BOARD_H) % BOARD_H;
+        return 1;
+    }
+    return out->x >= 0 && out->x < BOARD_W && out->y >= 0 && out->y < BOARD_H;
+}
+
+/* chooses the best direction toward the nearest food; returns 0 if the
+   AI cannot find any legal move */
+static int hunt_step(Game *g, int out[2]) {
+    if (BOARD_W > MAX_BOARD_W || BOARD_H > MAX_BOARD_H) return 0;
+    static int dist[MAX_BOARD_H][MAX_BOARD_W];
+    static int qx[MAX_BOARD_W * MAX_BOARD_H];
+    static int qy[MAX_BOARD_W * MAX_BOARD_H];
+    static unsigned char occ[MAX_BOARD_H * MAX_BOARD_W];
+
+    int w = BOARD_W, h = BOARD_H;
+    fill_occupancy(g, occ, w, h);
+
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) dist[y][x] = -1;
+
+    /* seed the queue with every food token: BFS then yields distance-to-
+       nearest-token for every free cell */
+    int qh = 0, qt = 0;
+    for (int i = 0; i < FOOD_COUNT; i++) {
+        Point f = g->food[i];
+        if (f.x < 0 || f.x >= w || f.y < 0 || f.y >= h) continue;
+        if (dist[f.y][f.x] == 0) continue;      /* duplicate token */
+        dist[f.y][f.x] = 0;
+        qx[qt] = f.x; qy[qt] = f.y; qt++;
+    }
+
+    while (qh < qt) {
+        int x = qx[qh], y = qy[qh]; qh++;
+        for (int d = 0; d < 4; d++) {
+            int nx = x + HUNT_DX[d], ny = y + HUNT_DY[d];
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            if (dist[ny][nx] != -1 || occ[ny * w + nx]) continue;
+            dist[ny][nx] = dist[y][x] + 1;
+            qx[qt] = nx; qy[qt] = ny; qt++;
+        }
+    }
+
+    Point head = g->snake.cells[g->snake.head];
+    int best_dist = 1 << 30, best_d = -1;
+    for (int d = 0; d < 4; d++) {
+        int dx = HUNT_DX[d], dy = HUNT_DY[d];
+        if (dx == -g->dir[0] && dy == -g->dir[1]) continue; /* no reversal */
+        Point c1, c2;
+        if (!hunt_next_cell(g, head, dx, dy, &c1)) continue;
+        if (occ[c1.y * w + c1.x]) continue;
+        /* the stride: horizontal moves cover two cells per tick, so the
+           second cell must be safe too */
+        if (dy == 0) {
+            if (!hunt_next_cell(g, c1, dx, dy, &c2)) continue;
+            if (occ[c2.y * w + c2.x]) continue;
+        }
+        int dd = dist[c1.y][c1.x];
+        if (dd < 0) continue;                 /* no path to any food */
+        if (dd < best_dist) { best_dist = dd; best_d = d; }
+    }
+
+    if (best_d >= 0) { out[0] = HUNT_DX[best_d]; out[1] = HUNT_DY[best_d]; return 1; }
+
+    /* boxed in with no path: go straight if legal, else any legal cell */
+    Point c1;
+    if (hunt_next_cell(g, head, g->dir[0], g->dir[1], &c1) &&
+        !occ[c1.y * w + c1.x]) return 0; /* keep current dir */
+    for (int d = 0; d < 4; d++) {
+        int dx = HUNT_DX[d], dy = HUNT_DY[d];
+        if (dx == -g->dir[0] && dy == -g->dir[1]) continue;
+        if (hunt_next_cell(g, head, dx, dy, &c1) && !occ[c1.y * w + c1.x]) {
+            out[0] = dx; out[1] = dy; return 1;
+        }
+    }
+    return 0;
+}
+
 static void game_step(Game *g) {
     if (g->paused || !g->alive) return;
+
+    if (g->hunt) {
+        int d[2];
+        /* hunt_step returning 0 means "keep going straight" */
+        if (hunt_step(g, d)) { g->dir[0] = d[0]; g->dir[1] = d[1]; }
+        g->pending_count = 0;
+    }
 
     if (g->pending_count > 0) {
         g->dir[0] = g->pending[g->pending_head][0];
@@ -232,9 +342,14 @@ static void draw(Game *g, int highscore) {
     printw("  high %d", highscore);
     printw("  length %d", g->snake.len);
     if (g->wrap) printw("  [x]rap: on");
+    if (g->hunt) {
+        attron(A_BOLD);
+        printw("  HUNT");
+        attroff(A_BOLD);
+    }
     if (g->paused) printw("  PAUSED");
 
-    mvprintw(BOARD_H + 4, 2, "arrows/wasd/vim move · x wrap · p pause · r restart · q quit");
+    mvprintw(BOARD_H + 4, 2, "arrows/wasd/vim move · H auto-hunt · x wrap · p pause · r restart · q quit");
 
     /* cells sit at +2/+2: one for the box's origin, one for its border */
     /* food */
@@ -297,17 +412,21 @@ static int handle_key(Game *g, int ch) {
         case 'x': case 'X':
             g->wrap = !g->wrap;
             break;
+        case 'H':  /* shift+h; lowercase h stays vim-left */
+            g->hunt = !g->hunt;
+            g->pending_count = 0;
+            break;
         case 'r': case 'R':
             game_init(g);
             break;
         case KEY_UP: case 'k': case 'K': case 'w': case 'W':
-            queue_direction(g, 0, -1); break;
+            g->hunt = 0; queue_direction(g, 0, -1); break;
         case KEY_DOWN: case 'j': case 'J': case 's': case 'S':
-            queue_direction(g, 0, 1); break;
-        case KEY_LEFT: case 'h': case 'H':
-            queue_direction(g, -1, 0); break;
+            g->hunt = 0; queue_direction(g, 0, 1); break;
+        case KEY_LEFT: case 'h':
+            g->hunt = 0; queue_direction(g, -1, 0); break;
         case KEY_RIGHT: case 'l': case 'L':
-            queue_direction(g, 1, 0); break;
+            g->hunt = 0; queue_direction(g, 1, 0); break;
         case KEY_RESIZE:
             fit_board();
             sanitize_after_resize(g);

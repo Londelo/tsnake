@@ -6,8 +6,9 @@ Single-file C + ncurses snake game. No dependencies beyond ncurses; no build sys
 
 | File | Purpose |
 |---|---|
-| `snake.c` | The entire game (~280 lines) |
-| `Makefile` | `make` builds `snake`; `make run` builds and plays |
+| `snake.c` | The entire game (~400 lines) |
+| `test_hunt.c` | Headless harness: `#define main snake_unused_main`, includes `snake.c`, drives the AI with no terminal |
+| `Makefile` | `make` builds `snake`; `make run` plays; `make test` runs the hunt harness |
 
 ## Architecture (snake.c)
 
@@ -17,6 +18,7 @@ Single-file C + ncurses snake game. No dependencies beyond ncurses; no build sys
 - **Rules**: tail-vacating-a-cell is legal (see `snake_contains` skip_tail arg); high score in `.tsnake_highscore`.
 - **Aspect ratio**: terminal cells are ~2x taller than wide, so `game_step` advances horizontal moves two cells per tick (`advance_one` called twice, each cell checked) to even out visual speed; speed ramps 80ms → 30ms per tick as score climbs.
 - **Food**: `FOOD_COUNT` (3) tokens always on the board; eating respawns only that slot (`spawn_food` re-rolls clear of snake and other tokens).
+- **Auto-hunt** (`H`, shift+h — lowercase `h` stays vim-left): `hunt_step` does multi-source BFS from all food over an occupancy grid (`fill_occupancy`, guard-capped at 200×120), head steps to the min-distance neighbor. Validates both cells of the horizontal 2-cell stride; refuses reversals; falls back to straight/any-legal-cell when boxed in. Any steering key cancels hunt. Greedy AI, no flood-fill survival heuristic — can self-trap when long.
 
 ## Build
 

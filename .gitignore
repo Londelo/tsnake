@@ -1,3 +1,5 @@
 snake
+snake.exe
+test_hunt
 *.o
 .tsnake_highscore

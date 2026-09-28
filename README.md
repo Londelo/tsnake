@@ -15,7 +15,8 @@ Requires `ncurses` dev headers (`sudo pacman -S ncurses` on Arch — usually alr
 
 | Key | Action |
 |---|---|
-| Arrows / WASD / vim (h/j/k/l) | Steer |
+| Arrows / WASD / vim (h/j/k/l) | Steer (also cancels auto-hunt) |
+| `H` (shift+h) | Toggle auto-hunt — AI chases the nearest food |
 | `p` or space | Pause |
 | `x` | Toggle wrap-around walls |
 | `r` | Restart |
@@ -30,3 +31,8 @@ Requires `ncurses` dev headers (`sudo pacman -S ncurses` on Arch — usually alr
 - Direction changes are queued, so mashing keys can't reverse you into yourself.
 - Moving into the cell your tail is vacating this tick is legal (as it should be).
 - High score persists to `~/.tsnake_highscore`.
+- Auto-hunt (`H`) runs a multi-source BFS from all three tokens each tick and
+  steps toward the closest one, avoiding your body and the wall on the full
+  two-cell horizontal stride. Greedy, not immortal — a long body can still
+  trap it.
+- `make test` runs the headless hunt harness (`test_hunt.c`).
