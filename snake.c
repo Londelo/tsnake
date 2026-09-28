@@ -13,9 +13,23 @@
 #include <time.h>
 
 #define MAX_SNAKE 4096
-#define BOARD_W   40
-#define BOARD_H   20
+#define MIN_BOARD_W 10
+#define MIN_BOARD_H 6
 #define INPUT_QUEUE_SIZE 4
+
+/* board size is derived from the terminal on startup and on SIGWINCH */
+static int BOARD_W = 40;
+static int BOARD_H = 20;
+
+/* Layout: row 0 = header, rows 1..BOARD_H+2 = bordered play field,
+   the cell (x, y) is drawn at screen row y+2, screen col x+2 (the box
+   border occupies the outer ring). */
+static void fit_board(void) {
+    int w = COLS - 4;      /* border (2 cols) + 2 col right margin */
+    int h = LINES - 6;     /* header + border + help row + breathing room */
+    BOARD_W = w < MIN_BOARD_W ? MIN_BOARD_W : w;
+    BOARD_H = h < MIN_BOARD_H ? MIN_BOARD_H : h;
+}
 
 typedef struct {
     int x, y;
@@ -196,14 +210,15 @@ static void draw(Game *g, int highscore) {
     attroff(A_BOLD);
     printw("  high %d", highscore);
     printw("  length %d", g->snake.len);
-    if (g->wrap) printw("  [w]rap: on");
+    if (g->wrap) printw("  [x]rap: on");
     if (g->paused) printw("  PAUSED");
 
-    mvprintw(BOARD_H + 3, 2, "arrows/wasd/vim move · x wrap · p pause · r restart · q quit");
+    mvprintw(BOARD_H + 4, 2, "arrows/wasd/vim move · x wrap · p pause · r restart · q quit");
 
+    /* cells sit at +2/+2: one for the box's origin, one for its border */
     /* food */
     if (has_colors()) attron(COLOR_PAIR(1));
-    mvaddch(1 + g->food.y, 1 + g->food.x, '@');
+    mvaddch(2 + g->food.y, 2 + g->food.x, '@');
     if (has_colors()) attroff(COLOR_PAIR(1));
 
     /* snake */
@@ -211,15 +226,15 @@ static void draw(Game *g, int highscore) {
     for (int i = 0; i < g->snake.len; i++) {
         int idx = (g->snake.head - i + MAX_SNAKE) % MAX_SNAKE;
         Point p = g->snake.cells[idx];
-        mvaddch(1 + p.y, 1 + p.x, i == 0 ? 'O' : 'o');
+        mvaddch(2 + p.y, 2 + p.x, i == 0 ? 'O' : 'o');
     }
     if (has_colors()) attroff(COLOR_PAIR(2));
 
     if (!g->alive) {
         attron(A_BOLD | A_STANDOUT);
-        mvprintw(BOARD_H / 2 + 1, 3, " GAME OVER  score %d ", g->score);
+        mvprintw(2 + BOARD_H / 2, 4, " GAME OVER  score %d ", g->score);
         attroff(A_BOLD | A_STANDOUT);
-        mvprintw(BOARD_H / 2 + 2, 3, " r to restart, q to quit ");
+        mvprintw(3 + BOARD_H / 2, 4, " r to restart, q to quit ");
     }
 
     refresh();
@@ -231,6 +246,25 @@ static void setup_colors(void) {
     use_default_colors();
     init_pair(1, COLOR_RED, -1);      /* food */
     init_pair(2, COLOR_GREEN, -1);    /* snake */
+}
+
+/* after a resize the board may have shrunk under the game — move the
+   food back inside, and restart if any snake segment no longer fits */
+static void sanitize_after_resize(Game *g) {
+    for (int i = 0; i < g->snake.len; i++) {
+        int idx = (g->snake.head - i + MAX_SNAKE) % MAX_SNAKE;
+        Point p = g->snake.cells[idx];
+        if (p.x < 0 || p.x >= BOARD_W || p.y < 0 || p.y >= BOARD_H) {
+            game_init(g);
+            return;
+        }
+    }
+    if (g->food.x >= BOARD_W || g->food.y >= BOARD_H) {
+        do {
+            g->food.x = rng(BOARD_W);
+            g->food.y = rng(BOARD_H);
+        } while (snake_contains(&g->snake, g->food, 0));
+    }
 }
 
 /* returns 0 to quit */
@@ -255,6 +289,10 @@ static int handle_key(Game *g, int ch) {
             queue_direction(g, -1, 0); break;
         case KEY_RIGHT: case 'l': case 'L':
             queue_direction(g, 1, 0); break;
+        case KEY_RESIZE:
+            fit_board();
+            sanitize_after_resize(g);
+            break;
         default:
             break;
     }
@@ -277,6 +315,7 @@ int main(void) {
     curs_set(0);
     nodelay(stdscr, TRUE);
     setup_colors();
+    fit_board();
 
     Game g;
     game_init(&g);
