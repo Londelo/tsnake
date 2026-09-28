@@ -16,6 +16,7 @@
 #define MIN_BOARD_W 10
 #define MIN_BOARD_H 6
 #define INPUT_QUEUE_SIZE 4
+#define FOOD_COUNT 3
 
 /* board size is derived from the terminal on startup and on SIGWINCH */
 static int BOARD_W = 40;
@@ -42,7 +43,7 @@ typedef struct {
 } Snake;
 
 typedef struct {
-    Point food;
+    Point food[FOOD_COUNT];
     Snake snake;
     int dir[2];            /* current direction: dx, dy */
     int pending[INPUT_QUEUE_SIZE][2]; /* queued direction changes */
@@ -112,6 +113,22 @@ static int snake_contains(Snake *s, Point p, int skip_tail) {
     return 0;
 }
 
+static int food_index_at(const Game *g, Point p) {
+    for (int i = 0; i < FOOD_COUNT; i++)
+        if (g->food[i].x == p.x && g->food[i].y == p.y) return i;
+    return -1;
+}
+
+static void spawn_food(Game *g, int i) {
+    /* keep re-rolling until the token lands off the snake and off any
+       other token (food_index_at returning i means it hit its own slot) */
+    do {
+        g->food[i].x = rng(BOARD_W);
+        g->food[i].y = rng(BOARD_H);
+    } while (snake_contains(&g->snake, g->food[i], 0) ||
+             food_index_at(g, g->food[i]) != i);
+}
+
 static void game_init(Game *g) {
     memset(g, 0, sizeof(*g));
     snake_init(&g->snake);
@@ -125,11 +142,7 @@ static void game_init(Game *g) {
     g->alive = 1;
     g->score = 0;
 
-    /* place first food somewhere the snake isn't */
-    do {
-        g->food.x = rng(BOARD_W);
-        g->food.y = rng(BOARD_H);
-    } while (snake_contains(&g->snake, g->food, 0));
+    for (int i = 0; i < FOOD_COUNT; i++) spawn_food(g, i);
 }
 
 static void queue_direction(Game *g, int dx, int dy) {
@@ -150,16 +163,8 @@ static void queue_direction(Game *g, int dx, int dy) {
     }
 }
 
-static void game_step(Game *g) {
-    if (g->paused || !g->alive) return;
-
-    if (g->pending_count > 0) {
-        g->dir[0] = g->pending[g->pending_head][0];
-        g->dir[1] = g->pending[g->pending_head][1];
-        g->pending_head = (g->pending_head + 1) % INPUT_QUEUE_SIZE;
-        g->pending_count--;
-    }
-
+/* one cell forward: wall wrap/bounce, food, self collision */
+static void advance_one(Game *g) {
     Point head = g->snake.cells[g->snake.head];
     Point next = { head.x + g->dir[0], head.y + g->dir[1] };
 
@@ -171,9 +176,10 @@ static void game_step(Game *g) {
         return;
     }
 
-    /* self collision: the tail cell is vacated this tick, so it's legal
+    /* self collision: the tail cell is vacated this step, so it's legal
        to move there unless we just ate */
-    int ate = (next.x == g->food.x && next.y == g->food.y);
+    int fi = food_index_at(g, next);
+    int ate = fi >= 0;
     if (snake_contains(&g->snake, next, !ate)) {
         g->alive = 0;
         return;
@@ -182,19 +188,34 @@ static void game_step(Game *g) {
     snake_push(&g->snake, next);
     if (ate) {
         g->score++;
-        do {
-            g->food.x = rng(BOARD_W);
-            g->food.y = rng(BOARD_H);
-        } while (snake_contains(&g->snake, g->food, 0));
+        spawn_food(g, fi);
     } else {
         snake_pop_tail(&g->snake);
     }
 }
 
+static void game_step(Game *g) {
+    if (g->paused || !g->alive) return;
+
+    if (g->pending_count > 0) {
+        g->dir[0] = g->pending[g->pending_head][0];
+        g->dir[1] = g->pending[g->pending_head][1];
+        g->pending_head = (g->pending_head + 1) % INPUT_QUEUE_SIZE;
+        g->pending_count--;
+    }
+
+    /* Terminal cells are ~2x taller than wide, so a vertical cell per tick
+       *looks* twice as fast as a horizontal one. Horizontal moves take two
+       cells per tick (each cell checked separately) to even out visual
+       speed. */
+    int steps = (g->dir[1] == 0) ? 2 : 1;
+    for (int s = 0; s < steps && g->alive; s++) advance_one(g);
+}
+
 /* game speed: one tick every `delay` ms, speeding up as you score */
 static int tick_delay_ms(const Game *g) {
-    int d = 120 - g->score * 3;
-    return d < 45 ? 45 : d;
+    int d = 80 - g->score * 2;
+    return d < 30 ? 30 : d;
 }
 
 static void draw(Game *g, int highscore) {
@@ -218,7 +239,8 @@ static void draw(Game *g, int highscore) {
     /* cells sit at +2/+2: one for the box's origin, one for its border */
     /* food */
     if (has_colors()) attron(COLOR_PAIR(1));
-    mvaddch(2 + g->food.y, 2 + g->food.x, '@');
+    for (int i = 0; i < FOOD_COUNT; i++)
+        mvaddch(2 + g->food[i].y, 2 + g->food[i].x, '@');
     if (has_colors()) attroff(COLOR_PAIR(1));
 
     /* snake */
@@ -259,12 +281,9 @@ static void sanitize_after_resize(Game *g) {
             return;
         }
     }
-    if (g->food.x >= BOARD_W || g->food.y >= BOARD_H) {
-        do {
-            g->food.x = rng(BOARD_W);
-            g->food.y = rng(BOARD_H);
-        } while (snake_contains(&g->snake, g->food, 0));
-    }
+    for (int i = 0; i < FOOD_COUNT; i++)
+        if (g->food[i].x >= BOARD_W || g->food[i].y >= BOARD_H)
+            spawn_food(g, i);
 }
 
 /* returns 0 to quit */

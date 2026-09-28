@@ -23,7 +23,10 @@ Requires `ncurses` dev headers (`sudo pacman -S ncurses` on Arch — usually alr
 
 ## Details
 
-- Snake speed ramps up as you eat (120ms/tick down to 45ms).
+- Three food tokens are always on the map; eating one respawns just that one.
+- Terminal cells are ~2x taller than wide, so horizontal moves take two
+  cells per tick to match the visual speed of vertical movement.
+- Snake speed ramps up as you eat (80ms/tick down to 30ms).
 - Direction changes are queued, so mashing keys can't reverse you into yourself.
 - Moving into the cell your tail is vacating this tick is legal (as it should be).
 - High score persists to `~/.tsnake_highscore`.
