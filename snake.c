@@ -322,59 +322,106 @@ static void game_step(Game *g) {
     for (int s = 0; s < steps && g->alive; s++) advance_one(g);
 }
 
-/* game speed: one tick every `delay` ms, speeding up as you score */
+/* game speed: a constant tick. Speed deliberately does NOT scale with
+   score — tying it to score made the snake feel faster as it grew. */
+#define TICK_MS 55
 static int tick_delay_ms(const Game *g) {
-    int d = 80 - g->score * 2;
-    return d < 30 ? 30 : d;
+    (void)g;
+    return TICK_MS;
+}
+
+/* floating centered menu for the pause / game-over screens: blanks its
+   rectangle (hiding the board behind it) and shows a titled box. Game
+   state is untouched — this is pure presentation. */
+static void draw_panel(const char *title, const char *lines[], int nlines) {
+    int w = (int)strlen(title) + 8;
+    for (int i = 0; i < nlines; i++) {
+        int lw = (int)strlen(lines[i]) + 4;
+        if (lw > w) w = lw;
+    }
+    if (w < 26) w = 26;
+    if (w > COLS - 2) w = COLS - 2;
+    int h = nlines + 3;   /* border · title · lines · border */
+    int y0 = (LINES - h) / 2; if (y0 < 1) y0 = 1;
+    int x0 = (COLS - w) / 2;  if (x0 < 1) x0 = 1;
+
+    WINDOW *p = derwin(stdscr, h, w, y0, x0);
+    werase(p);   /* derwin shares stdscr's buffer: this hides the board */
+    if (has_colors()) wattron(p, COLOR_PAIR(5) | A_BOLD);
+    box(p, 0, 0);
+    if (has_colors()) wattroff(p, COLOR_PAIR(5) | A_BOLD);
+    if (has_colors()) wattron(p, COLOR_PAIR(4) | A_BOLD);
+    mvwprintw(p, 1, (w - (int)strlen(title)) / 2, "%s", title);
+    if (has_colors()) wattroff(p, COLOR_PAIR(4) | A_BOLD);
+    for (int i = 0; i < nlines; i++)
+        mvwprintw(p, i + 2, 2, "%-*s", w - 4, lines[i]);
 }
 
 static void draw(Game *g, int highscore) {
     erase();
 
-    /* board box occupies rows 1..BOARD_H+2, cols 1..BOARD_W+2 */
+    /* board box occupies rows 1..BOARD_H+2, cols 1..BOARD_W+2; its border
+       burns red-orange while auto-hunt is armed */
     WINDOW *board = derwin(stdscr, BOARD_H + 2, BOARD_W + 2, 1, 1);
+    if (g->hunt && has_colors()) attron(COLOR_PAIR(3) | A_BOLD);
     box(board, 0, 0);
+    if (g->hunt && has_colors()) attroff(COLOR_PAIR(3) | A_BOLD);
 
     mvprintw(0, 2, " tsnake ");
     attron(A_BOLD);
     printw("score %d", g->score);
     attroff(A_BOLD);
-    printw("  high %d", highscore);
-    printw("  length %d", g->snake.len);
-    if (g->wrap) printw("  [x]rap: on");
-    printw("  hunt: ");
-    if (g->hunt) {
-        attron(A_BOLD | A_REVERSE);
-        printw("ON ");
-        attroff(A_BOLD | A_REVERSE);
-    } else {
-        printw("off");
+    printw("  high %d  length %d", highscore, g->snake.len);
+
+    /* food & snake hide while a menu floats over the board — the state is
+       fully preserved underneath, only the pixels go away */
+    if (!g->paused && g->alive) {
+        /* cells sit at +2/+2: one for the box's origin, one for its border */
+        if (has_colors()) attron(COLOR_PAIR(1));
+        for (int i = 0; i < FOOD_COUNT; i++)
+            mvaddch(2 + g->food[i].y, 2 + g->food[i].x, '@');
+        if (has_colors()) attroff(COLOR_PAIR(1));
+
+        if (has_colors()) attron(COLOR_PAIR(2));
+        for (int i = 0; i < g->snake.len; i++) {
+            int idx = (g->snake.head - i + MAX_SNAKE) % MAX_SNAKE;
+            Point p = g->snake.cells[idx];
+            mvaddch(2 + p.y, 2 + p.x, i == 0 ? 'O' : 'o');
+        }
+        if (has_colors()) attroff(COLOR_PAIR(2));
     }
-    if (g->paused) printw("  PAUSED");
 
-    mvprintw(BOARD_H + 4, 2, "arrows/wasd/vim move · H or Enter auto-hunt · x wrap · p pause · r restart · q quit");
-
-    /* cells sit at +2/+2: one for the box's origin, one for its border */
-    /* food */
-    if (has_colors()) attron(COLOR_PAIR(1));
-    for (int i = 0; i < FOOD_COUNT; i++)
-        mvaddch(2 + g->food[i].y, 2 + g->food[i].x, '@');
-    if (has_colors()) attroff(COLOR_PAIR(1));
-
-    /* snake */
-    if (has_colors()) attron(COLOR_PAIR(2));
-    for (int i = 0; i < g->snake.len; i++) {
-        int idx = (g->snake.head - i + MAX_SNAKE) % MAX_SNAKE;
-        Point p = g->snake.cells[idx];
-        mvaddch(2 + p.y, 2 + p.x, i == 0 ? 'O' : 'o');
+    int help_row = BOARD_H + 4;
+    if (help_row < LINES) {
+        mvprintw(help_row, 2, "arrows move · h auto-hunt · x wrap · p pause · r restart · q quit");
+        /* right-aligned ALL-CAPS status labels, yellow when armed */
+        int right = COLS - 3;
+        if (g->wrap) {
+            right -= 6;
+            if (right >= 2) {
+                if (has_colors()) attron(COLOR_PAIR(4) | A_BOLD);
+                mvprintw(help_row, right, "WRAP");
+                if (has_colors()) attroff(COLOR_PAIR(4) | A_BOLD);
+            }
+        }
+        if (g->hunt) {
+            right -= 11;
+            if (right >= 2) {
+                if (has_colors()) attron(COLOR_PAIR(4) | A_BOLD);
+                mvprintw(help_row, right, "AUTO HUNT");
+                if (has_colors()) attroff(COLOR_PAIR(4) | A_BOLD);
+            }
+        }
     }
-    if (has_colors()) attroff(COLOR_PAIR(2));
 
     if (!g->alive) {
-        attron(A_BOLD | A_STANDOUT);
-        mvprintw(2 + BOARD_H / 2, 4, " GAME OVER  score %d ", g->score);
-        attroff(A_BOLD | A_STANDOUT);
-        mvprintw(3 + BOARD_H / 2, 4, " r to restart, q to quit ");
+        char info[64];
+        snprintf(info, sizeof(info), "score %d    high %d", g->score, highscore);
+        const char *lines[] = { info, "", "r   restart", "q   quit" };
+        draw_panel("GAME OVER", lines, 4);
+    } else if (g->paused) {
+        const char *lines[] = { "p   resume", "r   restart", "q   quit" };
+        draw_panel("PAUSED", lines, 3);
     }
 
     refresh();
@@ -384,56 +431,97 @@ static void setup_colors(void) {
     if (!has_colors()) return;
     start_color();
     use_default_colors();
-    init_pair(1, COLOR_RED, -1);      /* food */
-    init_pair(2, COLOR_GREEN, -1);    /* snake */
+    init_pair(1, COLOR_RED, -1);        /* food */
+    init_pair(2, COLOR_GREEN, -1);      /* snake */
+    init_pair(3, COLOR_RED, -1);        /* hunt border (A_BOLD -> red-orange) */
+    init_pair(4, COLOR_YELLOW, -1);     /* ALL-CAPS status labels + titles */
+    init_pair(5, COLOR_CYAN, -1);       /* floating menu border */
 }
 
-/* after a resize the board may have shrunk under the game — move the
-   food back inside, and restart if any snake segment no longer fits */
+/* coil the snake back into the board serpentine-style, preserving its
+   length; used when a shrink leaves segments outside the new bounds */
+static void relocate_snake(Game *g, int want_len) {
+    snake_init(&g->snake);
+    int cap = BOARD_W * BOARD_H;
+    if (want_len > cap) want_len = cap;
+    int x = 0, y = 0, dx = 1;
+    for (int i = 0; i < want_len; i++) {
+        Point p = { x, y };
+        snake_push(&g->snake, p);
+        x += dx;
+        if (x < 0 || x >= BOARD_W) {
+            x -= dx; dx = -dx; y++;
+            if (y >= BOARD_H) break;
+        }
+    }
+    g->dir[0] = dx; g->dir[1] = 0;
+    g->pending_head = 0; g->pending_count = 0;
+}
+
+/* after a resize the board may have shrunk under the game. State is never
+   reset here: score, hunt, wrap, pause and the snake's LENGTH survive —
+   if the snake no longer fits it is relocated, not restarted. */
 static void sanitize_after_resize(Game *g) {
+    int oob = 0;
     for (int i = 0; i < g->snake.len; i++) {
         int idx = (g->snake.head - i + MAX_SNAKE) % MAX_SNAKE;
         Point p = g->snake.cells[idx];
         if (p.x < 0 || p.x >= BOARD_W || p.y < 0 || p.y >= BOARD_H) {
-            game_init(g);
-            return;
+            oob = 1;
+            break;
         }
     }
+    if (oob) {
+        int keep_len = g->snake.len;
+        int keep_score = g->score, keep_wrap = g->wrap, keep_hunt = g->hunt;
+        int keep_paused = g->paused, keep_alive = g->alive;
+        game_init(g);
+        relocate_snake(g, keep_len);
+        g->score = keep_score;
+        g->wrap = keep_wrap;
+        g->hunt = keep_hunt;
+        g->paused = keep_paused;
+        g->alive = keep_alive;
+    }
+    /* food that ended up outside the new board, or under the relocated
+       snake, is re-rolled */
     for (int i = 0; i < FOOD_COUNT; i++)
-        if (g->food[i].x >= BOARD_W || g->food[i].y >= BOARD_H)
+        if (g->food[i].x >= BOARD_W || g->food[i].y >= BOARD_H ||
+            snake_contains(&g->snake, g->food[i], 0))
             spawn_food(g, i);
 }
 
-/* returns 0 to quit */
+/* returns 0 to quit. Deliberately lowercase-only keys — one key, one job. */
 static int handle_key(Game *g, int ch) {
     switch (ch) {
-        case 'q': case 'Q':
+        case 'q':
             return 0;
-        case 'p': case 'P': case ' ':
-            g->paused = !g->paused;
+        case 'p':
+            if (g->alive) g->paused = !g->paused;
             break;
-        case 'x': case 'X':
+        case 'x':
             g->wrap = !g->wrap;
             break;
-        case 'H': case '\n': case KEY_ENTER:
-            /* H (shift+h), Enter — lowercase h stays vim-left */
+        case 'h':
             g->hunt = !g->hunt;
             g->pending_count = 0;
             break;
-        case 'r': case 'R':
+        case 'r':
             game_init(g);
             break;
-        case KEY_UP: case 'k': case 'K': case 'w': case 'W':
+        case KEY_UP:
             g->hunt = 0; queue_direction(g, 0, -1); break;
-        case KEY_DOWN: case 'j': case 'J': case 's': case 'S':
+        case KEY_DOWN:
             g->hunt = 0; queue_direction(g, 0, 1); break;
-        case KEY_LEFT: case 'h': case 'a': case 'A':
+        case KEY_LEFT:
             g->hunt = 0; queue_direction(g, -1, 0); break;
-        case KEY_RIGHT: case 'l': case 'L': case 'd': case 'D':
+        case KEY_RIGHT:
             g->hunt = 0; queue_direction(g, 1, 0); break;
         case KEY_RESIZE:
             fit_board();
             sanitize_after_resize(g);
+            endwin();     /* force a clean full redraw at the new size */
+            refresh();
             break;
         default:
             break;
