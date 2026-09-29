@@ -2,6 +2,10 @@
 
 Snake in your terminal. Written in C with ncurses — one file, zero dependencies, instant startup.
 
+> **Status:** stable and fully working (2026-09-29) — steering, key-mash
+> protection, wrap mode, resize-to-fit, auto-hunt, and the headless test
+> harness (`make test`) all verified working.
+
 ## Build & run
 
 ```sh
