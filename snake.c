@@ -342,14 +342,17 @@ static void draw(Game *g, int highscore) {
     printw("  high %d", highscore);
     printw("  length %d", g->snake.len);
     if (g->wrap) printw("  [x]rap: on");
+    printw("  hunt: ");
     if (g->hunt) {
-        attron(A_BOLD);
-        printw("  HUNT");
-        attroff(A_BOLD);
+        attron(A_BOLD | A_REVERSE);
+        printw("ON ");
+        attroff(A_BOLD | A_REVERSE);
+    } else {
+        printw("off");
     }
     if (g->paused) printw("  PAUSED");
 
-    mvprintw(BOARD_H + 4, 2, "arrows/wasd/vim move · H auto-hunt · x wrap · p pause · r restart · q quit");
+    mvprintw(BOARD_H + 4, 2, "arrows/wasd/vim move · H or Enter auto-hunt · x wrap · p pause · r restart · q quit");
 
     /* cells sit at +2/+2: one for the box's origin, one for its border */
     /* food */
@@ -412,7 +415,8 @@ static int handle_key(Game *g, int ch) {
         case 'x': case 'X':
             g->wrap = !g->wrap;
             break;
-        case 'H':  /* shift+h; lowercase h stays vim-left */
+        case 'H': case '\n': case KEY_ENTER:
+            /* H (shift+h), Enter — lowercase h stays vim-left */
             g->hunt = !g->hunt;
             g->pending_count = 0;
             break;
@@ -423,9 +427,9 @@ static int handle_key(Game *g, int ch) {
             g->hunt = 0; queue_direction(g, 0, -1); break;
         case KEY_DOWN: case 'j': case 'J': case 's': case 'S':
             g->hunt = 0; queue_direction(g, 0, 1); break;
-        case KEY_LEFT: case 'h':
+        case KEY_LEFT: case 'h': case 'a': case 'A':
             g->hunt = 0; queue_direction(g, -1, 0); break;
-        case KEY_RIGHT: case 'l': case 'L':
+        case KEY_RIGHT: case 'l': case 'L': case 'd': case 'D':
             g->hunt = 0; queue_direction(g, 1, 0); break;
         case KEY_RESIZE:
             fit_board();

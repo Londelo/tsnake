@@ -16,11 +16,14 @@ Requires `ncurses` dev headers (`sudo pacman -S ncurses` on Arch — usually alr
 | Key | Action |
 |---|---|
 | Arrows / WASD / vim (h/j/k/l) | Steer (also cancels auto-hunt) |
-| `H` (shift+h) | Toggle auto-hunt — AI chases the nearest food |
+| **Enter** or `H` | Toggle auto-hunt — AI chases the nearest food |
 | `p` or space | Pause |
 | `x` | Toggle wrap-around walls |
 | `r` | Restart |
 | `q` | Quit |
+
+The header shows `hunt: ON/off` so you can see whether the toggle took.
+(`h` without shift is vim-left, so plain h won't arm the AI — use Enter.)
 
 ## Details
 
