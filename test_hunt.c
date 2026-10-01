@@ -22,11 +22,10 @@ int main(void) {
         int d[2];
         int r = hunt_step(&g, d);
         if (tick < 5)
-            printf("tick %d: hunt_step=%d d=(%d,%d) alive=%d score=%d\n",
-                   tick, r, d[0], d[1], g.alive, g.score);
+            printf("tick %d: hunt_step=%d d=(%d,%d) alive=%d len=%d\n",
+                   tick, r, d[0], d[1], g.alive, g.snake.len);
         game_step(&g);
     }
-    printf("after 200 ticks: alive=%d score=%d len=%d\n",
-           g.alive, g.score, g.snake.len);
+    printf("after 200 ticks: alive=%d len=%d\n", g.alive, g.snake.len);
     return 0;
 }

@@ -17,6 +17,8 @@
 #define MIN_BOARD_H 6
 #define INPUT_QUEUE_SIZE 4
 #define FOOD_COUNT 3
+#define FLASH_TICKS 10    /* ticks the border stays green after eating (~0.5s) */
+#define WOUND_FADE 55     /* ticks a severed cell stays red before vanishing (~3s) */
 
 /* board size is derived from the terminal on startup and on SIGWINCH */
 static int BOARD_W = 40;
@@ -36,10 +38,33 @@ typedef struct {
     int x, y;
 } Point;
 
+static int in_bounds(Point p) {
+    return p.x >= 0 && p.x < BOARD_W && p.y >= 0 && p.y < BOARD_H;
+}
+
+/* A self bite is a wound, not a death. The bitten cell and every cell from
+   there toward the tail tip detach, go red where they fell, and fade out a
+   few seconds later while the head keeps travelling.
+   The severed cells have to be COPIED OUT of the ring into `wound`, because
+   the ring belongs to the live body: its cells keep moving with the head, so
+   a cell that has dropped out of the body no longer holds the position it
+   fell at. Reading the corpse back out of the ring by index would make it
+   drift along with the snake instead of lying where it fell.
+   Each severed cell carries its own countdown, so the chunk fades as a wave
+   running away from the bite — the bitten cell dies first, the tail tip last
+   — rather than the whole chunk blinking out on one tick. */
+typedef struct {
+    Point p;
+    int ttl;            /* ticks left before this cell vanishes; <=0 = gone */
+} WoundCell;
+
 typedef struct {
     Point cells[MAX_SNAKE];
-    int head;      /* index of the head */
-    int len;
+    int head;       /* index of the head */
+    int len;        /* live body: the len ring cells ending at `head` */
+    /* the severed tail, still bleeding out: drawn red, and still solid */
+    WoundCell wound[MAX_SNAKE];
+    int wound_len;
 } Snake;
 
 typedef struct {
@@ -48,7 +73,7 @@ typedef struct {
     int dir[2];            /* current direction: dx, dy */
     int pending[INPUT_QUEUE_SIZE][2]; /* queued direction changes */
     int pending_head, pending_count;
-    int score;
+    int flash;               /* ticks left of green border flash after a eat */
     int alive;
     int paused;
     int wrap;
@@ -70,22 +95,23 @@ static const char *highscore_path(void) {
     return path;
 }
 
-static void load_highscore(int *score) {
-    *score = 0;
+/* the high score IS the best snake length ever reached */
+static void load_highscore(int *best) {
+    *best = 0;
     FILE *f = fopen(highscore_path(), "r");
     if (f) {
-        if (fscanf(f, "%d", score) != 1) *score = 0;
+        if (fscanf(f, "%d", best) != 1) *best = 0;
         fclose(f);
     }
 }
 
-static void save_highscore(int score) {
+static void save_highscore(int length) {
     int best = 0;
     load_highscore(&best);
-    if (score <= best) return;
+    if (length <= best) return;
     FILE *f = fopen(highscore_path(), "w");
     if (f) {
-        fprintf(f, "%d\n", score);
+        fprintf(f, "%d\n", length);
         fclose(f);
     }
 }
@@ -93,25 +119,91 @@ static void save_highscore(int score) {
 static void snake_init(Snake *s) {
     s->head = 0;
     s->len = 0;
+    s->wound_len = 0;
 }
 
+/* The ring head, and the live body length, both counted in ring cells
+   BEHIND the head. The body never rewrites its own cells, so a step can
+   always be read straight back down the ring. */
 static void snake_push(Snake *s, Point p) {
     s->head = (s->head + 1) % MAX_SNAKE;
     s->cells[s->head] = p;
     if (s->len < MAX_SNAKE) s->len++;
 }
 
+/* a normal step: the tail tip keeps up with the head */
 static void snake_pop_tail(Snake *s) {
     if (s->len > 0) s->len--;
 }
 
-static int snake_contains(Snake *s, Point p, int skip_tail) {
-    int count = skip_tail ? s->len - 1 : s->len;
-    for (int i = 0; i < count; i++) {
-        int idx = (s->head - i + MAX_SNAKE) % MAX_SNAKE;
-        if (s->cells[idx].x == p.x && s->cells[idx].y == p.y) return 1;
+/* How far back from the head does the live body run? 0 is the head itself,
+   len-1 is the tail tip. -1 means p is not part of the live body at all —
+   which includes every cell the body has ever shed, since the ring cells
+   holding those positions no longer belong to it. */
+static int snake_chain_depth(const Snake *s, Point p) {
+    for (int i = 0; i < s->len; i++) {
+        int idx = (s->head - i + MAX_SNAKE * 2) % MAX_SNAKE;
+        if (s->cells[idx].x == p.x && s->cells[idx].y == p.y) return i;
     }
+    return -1;
+}
+
+/* Is p one of the live body's cells? */
+static int snake_contains(const Snake *s, Point p) {
+    return snake_chain_depth(s, p) >= 0;
+}
+
+/* Still lying where it fell? A severed cell is drawn red, and stays solid to
+   the hunt AI, right up until its own countdown runs out. */
+static int snake_wound_contains(const Snake *s, Point p) {
+    for (int i = 0; i < s->wound_len; i++)
+        if (s->wound[i].ttl > 0 &&
+            s->wound[i].p.x == p.x && s->wound[i].p.y == p.y) return 1;
     return 0;
+}
+
+/* is this cell occupied — living body, or a corpse still bleeding out? */
+static int snake_occupied(const Game *g, Point p) {
+    return snake_contains(&g->snake, p) || snake_wound_contains(&g->snake, p);
+}
+
+/* A self bite severs the cell at chain depth `depth` and every cell from
+   there toward the tail tip, so the live body stops at the bite and the
+   length on screen is the live snake from this tick onward. The severed
+   positions are copied out of the ring first: shortening the body is what
+   stops the ring from holding them (see WoundCell). */
+static void snake_bite(Snake *s, int depth) {
+    if (depth < 0 || depth >= s->len) return;
+    int n = s->len - depth;
+    if (n > MAX_SNAKE - s->wound_len) n = MAX_SNAKE - s->wound_len;
+    if (n <= 0) return;
+    for (int i = 0; i < n; i++) {
+        int idx = (s->head - (depth + i) + MAX_SNAKE * 2) % MAX_SNAKE;
+        s->wound[s->wound_len].p = s->cells[idx];
+        /* The bitten cell dies first and the tail tip last, so the red runs
+           away from the bite rather than the whole chunk ending on one tick.
+           The spread stays inside WOUND_FADE: however big the chunk is, the
+           board is clean again within a few seconds of the bite. */
+        s->wound[s->wound_len].ttl =
+            WOUND_FADE / 2 + (WOUND_FADE / 2) * i / (n > 1 ? n - 1 : 1);
+        s->wound_len++;
+    }
+    s->len = depth;
+}
+
+/* one tick of bleeding. The queue drains from the front, which is always the
+   oldest bite; a cell that expires in the middle of the queue (possible once
+   a second bite lands behind the first) is harmless, since every reader
+   checks ttl before trusting a cell. */
+static void wound_tick(Snake *s) {
+    for (int i = 0; i < s->wound_len; i++) s->wound[i].ttl--;
+    int gone = 0;
+    while (gone < s->wound_len && s->wound[gone].ttl <= 0) gone++;
+    if (gone == 0) return;                          /* nothing has faded yet */
+    s->wound_len -= gone;
+    if (s->wound_len > 0)
+        memmove(s->wound, &s->wound[gone],
+                (size_t)s->wound_len * sizeof(s->wound[0]));
 }
 
 static int food_index_at(const Game *g, Point p) {
@@ -120,18 +212,33 @@ static int food_index_at(const Game *g, Point p) {
     return -1;
 }
 
+/* is a DIFFERENT token already sitting on p? slot i's own cell does not
+   count, since that is the one being re-rolled */
+static int other_token_at(const Game *g, Point p, int i) {
+    for (int j = 0; j < FOOD_COUNT; j++)
+        if (j != i && g->food[j].x == p.x && g->food[j].y == p.y) return 1;
+    return 0;
+}
+
 static void spawn_food(Game *g, int i) {
-    /* keep re-rolling until the token lands off the snake and off any
-       other token (food_index_at returning i means it hit its own slot) */
-    do {
+    /* Re-roll until the token lands clear of the snake and of every other
+       token. The test has to ask "is something else already here" rather than
+       "food_index_at != i": an empty cell reads as -1, which is != i, so that
+       version rejects every legal cell and escapes only by re-rolling onto the
+       token's own old position — which, right after an eat, is under the head,
+       so the loop never ends and the game hangs where it looks like it froze.
+       The cap is the same kind of guard the BFS uses: a board packed solid has
+       no legal cell to offer, and a bounded spin beats a frozen terminal. */
+    for (int guard = 0; guard < 1000; guard++) {
         g->food[i].x = rng(BOARD_W);
         g->food[i].y = rng(BOARD_H);
-    } while (snake_contains(&g->snake, g->food[i], 0) ||
-             food_index_at(g, g->food[i]) != i);
+        if (!snake_occupied(g, g->food[i]) && !other_token_at(g, g->food[i], i))
+            return;
+    }
 }
 
 static void game_init(Game *g) {
-    memset(g, 0, sizeof(*g));
+    memset(g, 0, sizeof(*g));   /* also wipes any leftover death debris */
     snake_init(&g->snake);
     /* push tail-first so the last cell pushed is the head at `start` */
     Point start = { BOARD_W / 4, BOARD_H / 2 };
@@ -141,7 +248,6 @@ static void game_init(Game *g) {
     }
     g->dir[0] = 1; g->dir[1] = 0;
     g->alive = 1;
-    g->score = 0;
 
     for (int i = 0; i < FOOD_COUNT; i++) spawn_food(g, i);
 }
@@ -164,35 +270,48 @@ static void queue_direction(Game *g, int dx, int dy) {
     }
 }
 
-/* one cell forward: wall wrap/bounce, food, self collision */
+/* One cell forward. game_step calls this twice per tick for a horizontal
+   move (terminal cells are ~2x taller than wide), checking each cell on its
+   own, so a step only ever has to reason about the single cell it lands on.
+   In wrap mode the seam is a tunnel; otherwise a wall is the ONLY thing that
+   kills — a step onto the snake's own body is a bite, not a death: that cell
+   and every cell from there back toward the tail tip detach, go red where
+   they fall, and the head moves on into the scar they leave.
+   Two landings are never a bite: the tail tip, which is vacated by the very
+   act of stepping, and any cell the body has already shed, which the head is
+   merely flying over — its own past is not in the way. */
 static void advance_one(Game *g) {
-    Point head = g->snake.cells[g->snake.head];
+    Snake *s = &g->snake;
+    Point head = s->cells[s->head];
     Point next = { head.x + g->dir[0], head.y + g->dir[1] };
 
     if (g->wrap) {
         next.x = (next.x + BOARD_W) % BOARD_W;
         next.y = (next.y + BOARD_H) % BOARD_H;
-    } else if (next.x < 0 || next.x >= BOARD_W || next.y < 0 || next.y >= BOARD_H) {
-        g->alive = 0;
+    } else if (!in_bounds(next)) {
+        g->alive = 0;   /* walls stay lethal */
         return;
     }
 
-    /* self collision: the tail cell is vacated this step, so it's legal
-       to move there unless we just ate */
     int fi = food_index_at(g, next);
-    int ate = fi >= 0;
-    if (snake_contains(&g->snake, next, !ate)) {
-        g->alive = 0;
+    if (fi >= 0) {
+        snake_push(s, next);
+        g->flash = FLASH_TICKS;         /* celebrate on the border */
+        spawn_food(g, fi);
+        return;                         /* a step that eats does not bite */
+    }
+
+    int depth = snake_chain_depth(s, next);
+    if (depth < 0 || depth == s->len - 1) {
+        snake_push(s, next);
+        snake_pop_tail(s);
         return;
     }
 
-    snake_push(&g->snake, next);
-    if (ate) {
-        g->score++;
-        spawn_food(g, fi);
-    } else {
-        snake_pop_tail(&g->snake);
-    }
+    /* A real bite: the bitten cell and everything from there toward the tail
+       tip detach, and the head moves on into the wound they used to be. */
+    snake_bite(s, depth);
+    snake_push(s, next);
 }
 
 /* ---- auto-hunt: multi-source BFS from all food to the head ---- */
@@ -200,12 +319,24 @@ static void advance_one(Game *g) {
 #define MAX_BOARD_W 200   /* guard rails for the BFS scratch arrays */
 #define MAX_BOARD_H 120
 
-/* fills an occupancy grid from the snake body (O(len) once, O(1) lookups) */
+/* Fills an occupancy grid from the snake — the live body, and any severed
+   cell still bleeding out — so hunt mode can read it in O(1) per cell.
+   Both passes only ever walk the live body and the live corpse, never the
+   whole ring, because hunt mode calls this every single tick.
+   A severed tail counts as solid right up until it fades: until then it is
+   still a wall in the middle of the board, so hunt mode gives it the same
+   wide berth it gives the live body. */
 static void fill_occupancy(Game *g, unsigned char *occ, int w, int h) {
     memset(occ, 0, (size_t)w * h);
-    for (int i = 0; i < g->snake.len; i++) {
-        int idx = (g->snake.head - i + MAX_SNAKE) % MAX_SNAKE;
-        Point p = g->snake.cells[idx];
+    Snake *s = &g->snake;
+    for (int i = 0; i < s->len; i++) {
+        int idx = (s->head - i + MAX_SNAKE * 2) % MAX_SNAKE;
+        Point p = s->cells[idx];
+        if (p.x >= 0 && p.x < w && p.y >= 0 && p.y < h) occ[p.y * w + p.x] = 1;
+    }
+    for (int i = 0; i < s->wound_len; i++) {
+        if (s->wound[i].ttl <= 0) continue;
+        Point p = s->wound[i].p;
         if (p.x >= 0 && p.x < w && p.y >= 0 && p.y < h) occ[p.y * w + p.x] = 1;
     }
 }
@@ -213,7 +344,13 @@ static void fill_occupancy(Game *g, unsigned char *occ, int w, int h) {
 static const int HUNT_DX[4] = {1, -1, 0, 0};
 static const int HUNT_DY[4] = {0, 0, 1, -1};
 
-/* wraps or bounds-checks one step from p along d; returns 0 if it dies */
+/* Where one step from p along d lands, and whether the snake may be there
+   next tick. A horizontal move is 2 cells, so the AI has to walk the whole
+   stride here: a direction whose second cell is taken is no escape, it only
+   postpones the crunch by a tick.
+   Wrap has to agree with advance_one here, or the AI would refuse to cross
+   a seam the game is perfectly happy to tunnel through and starve itself
+   waiting for food on the far side of the board. */
 static int hunt_next_cell(Game *g, Point p, int dx, int dy, Point *out) {
     out->x = p.x + dx;
     out->y = p.y + dy;
@@ -222,7 +359,7 @@ static int hunt_next_cell(Game *g, Point p, int dx, int dy, Point *out) {
         out->y = (out->y + BOARD_H) % BOARD_H;
         return 1;
     }
-    return out->x >= 0 && out->x < BOARD_W && out->y >= 0 && out->y < BOARD_H;
+    return in_bounds(*out);
 }
 
 /* chooses the best direction toward the nearest food; returns 0 if the
@@ -269,12 +406,12 @@ static int hunt_step(Game *g, int out[2]) {
         if (dx == -g->dir[0] && dy == -g->dir[1]) continue; /* no reversal */
         Point c1, c2;
         if (!hunt_next_cell(g, head, dx, dy, &c1)) continue;
-        if (occ[c1.y * w + c1.x]) continue;
-        /* the stride: horizontal moves cover two cells per tick, so the
-           second cell must be safe too */
+        if (snake_occupied(g, c1)) continue;
+        /* The stride: a horizontal move covers two cells per tick, so both
+           of them have to be free (see hunt_next_cell) */
         if (dy == 0) {
             if (!hunt_next_cell(g, c1, dx, dy, &c2)) continue;
-            if (occ[c2.y * w + c2.x]) continue;
+            if (snake_occupied(g, c2)) continue;
         }
         int dd = dist[c1.y][c1.x];
         if (dd < 0) continue;                 /* no path to any food */
@@ -298,7 +435,13 @@ static int hunt_step(Game *g, int out[2]) {
 }
 
 static void game_step(Game *g) {
+    Snake *s = &g->snake;
+
     if (g->paused || !g->alive) return;
+    if (g->flash > 0) g->flash--;
+
+    /* a severed cell is a live thing for WOUND_FADE ticks (see WoundCell) */
+    wound_tick(s);
 
     if (g->hunt) {
         int d[2];
@@ -308,6 +451,8 @@ static void game_step(Game *g) {
     }
 
     if (g->pending_count > 0) {
+        /* a lean that lands on the snake's own body is a bite, not a
+           death: whatever direction it clips (see advance_one) */
         g->dir[0] = g->pending[g->pending_head][0];
         g->dir[1] = g->pending[g->pending_head][1];
         g->pending_head = (g->pending_head + 1) % INPUT_QUEUE_SIZE;
@@ -319,11 +464,12 @@ static void game_step(Game *g) {
        cells per tick (each cell checked separately) to even out visual
        speed. */
     int steps = (g->dir[1] == 0) ? 2 : 1;
-    for (int s = 0; s < steps && g->alive; s++) advance_one(g);
+    for (int k = 0; k < steps && g->alive; k++) advance_one(g);
 }
 
 /* game speed: a constant tick. Speed deliberately does NOT scale with
-   score — tying it to score made the snake feel faster as it grew. */
+   progress — tying it to the old score made the snake feel faster as it
+   grew. Keep it constant. */
 #define TICK_MS 55
 static int tick_delay_ms(const Game *g) {
     (void)g;
@@ -357,36 +503,69 @@ static void draw_panel(const char *title, const char *lines[], int nlines) {
         mvwprintw(p, i + 2, 2, "%-*s", w - 4, lines[i]);
 }
 
+/* the head wears an arrow pointing where the snake is heading */
+static chtype head_glyph(const int dir[2]) {
+    if (dir[1] == -1) return '^';
+    if (dir[1] == 1)  return 'v';
+    if (dir[0] == -1) return '<';
+    return '>';
+}
+
 static void draw(Game *g, int highscore) {
     erase();
 
-    /* board box occupies rows 1..BOARD_H+2, cols 1..BOARD_W+2; its border
-       burns red-orange while auto-hunt is armed */
+    /* board box occupies rows 1..BOARD_H+2, cols 1..BOARD_W+2. Border
+       priority: a fresh eat flashes green, else auto-hunt burns red-orange */
     WINDOW *board = derwin(stdscr, BOARD_H + 2, BOARD_W + 2, 1, 1);
-    if (g->hunt && has_colors()) attron(COLOR_PAIR(3) | A_BOLD);
+    int border_pair = 0;   /* 0 = default */
+    if (has_colors()) {
+        if (g->flash > 0) border_pair = 1;       /* green flash */
+        else if (g->hunt) border_pair = 3;       /* red-orange */
+        if (border_pair) attron(COLOR_PAIR(border_pair) | A_BOLD);
+    }
     box(board, 0, 0);
-    if (g->hunt && has_colors()) attroff(COLOR_PAIR(3) | A_BOLD);
+    if (border_pair && has_colors()) attroff(COLOR_PAIR(border_pair) | A_BOLD);
 
     mvprintw(0, 2, " tsnake ");
     attron(A_BOLD);
-    printw("score %d", g->score);
+    printw("length %d", g->snake.len);
     attroff(A_BOLD);
-    printw("  high %d  length %d", highscore, g->snake.len);
+    printw("  high %d", highscore);
 
-    /* food & snake hide while a menu floats over the board — the state is
-       fully preserved underneath, only the pixels go away */
+    /* Food, snake and wounds hide while a menu floats over the board — the
+       state is fully preserved underneath, only the pixels go away. They go
+       under one `if`, not an early return: the help row, the floating panels
+       and the refresh() at the bottom of this function still have to run, and
+       bailing out here left the menus unrendered and the screen unflushed. */
     if (!g->paused && g->alive) {
         /* cells sit at +2/+2: one for the box's origin, one for its border */
         if (has_colors()) attron(COLOR_PAIR(1));
         for (int i = 0; i < FOOD_COUNT; i++)
-            mvaddch(2 + g->food[i].y, 2 + g->food[i].x, '@');
+            mvaddch(2 + g->food[i].y, 2 + g->food[i].x, '$');
         if (has_colors()) attroff(COLOR_PAIR(1));
 
+        /* The severed tail lies red where it fell until its own countdown runs
+           out. It goes under the live body, so the head moving into the scar it
+           just made still reads as a head, and it dims over its last third so
+           the chunk fades away rather than blinking out on one tick. */
+        if (has_colors()) attron(COLOR_PAIR(3));
+        for (int i = 0; i < g->snake.wound_len; i++) {
+            int ttl = g->snake.wound[i].ttl;
+            if (ttl <= 0) continue;
+            Point p = g->snake.wound[i].p;
+            if (!in_bounds(p)) continue;
+            if (ttl < WOUND_FADE / 3 && has_colors()) attron(A_DIM);
+            mvaddch(2 + p.y, 2 + p.x, 'o');
+            if (ttl < WOUND_FADE / 3 && has_colors()) attroff(A_DIM);
+        }
+        if (has_colors()) attroff(COLOR_PAIR(3));
+
         if (has_colors()) attron(COLOR_PAIR(2));
+        chtype head = head_glyph(g->dir);
         for (int i = 0; i < g->snake.len; i++) {
             int idx = (g->snake.head - i + MAX_SNAKE) % MAX_SNAKE;
             Point p = g->snake.cells[idx];
-            mvaddch(2 + p.y, 2 + p.x, i == 0 ? 'O' : 'o');
+            mvaddch(2 + p.y, 2 + p.x, i == 0 ? head : 'o');
         }
         if (has_colors()) attroff(COLOR_PAIR(2));
     }
@@ -416,7 +595,7 @@ static void draw(Game *g, int highscore) {
 
     if (!g->alive) {
         char info[64];
-        snprintf(info, sizeof(info), "score %d    high %d", g->score, highscore);
+        snprintf(info, sizeof(info), "length %d    high %d", g->snake.len, highscore);
         const char *lines[] = { info, "", "r   restart", "q   quit" };
         draw_panel("GAME OVER", lines, 4);
     } else if (g->paused) {
@@ -431,9 +610,9 @@ static void setup_colors(void) {
     if (!has_colors()) return;
     start_color();
     use_default_colors();
-    init_pair(1, COLOR_RED, -1);        /* food */
-    init_pair(2, COLOR_GREEN, -1);      /* snake */
-    init_pair(3, COLOR_RED, -1);        /* hunt border (A_BOLD -> red-orange) */
+    init_pair(1, COLOR_GREEN, -1);      /* food '$' + eat flash border */
+    init_pair(2, COLOR_WHITE, -1);      /* snake */
+    init_pair(3, COLOR_RED, -1);        /* wounds; hunt border (A_BOLD -> red-orange) */
     init_pair(4, COLOR_YELLOW, -1);     /* ALL-CAPS status labels + titles */
     init_pair(5, COLOR_CYAN, -1);       /* floating menu border */
 }
@@ -459,8 +638,8 @@ static void relocate_snake(Game *g, int want_len) {
 }
 
 /* after a resize the board may have shrunk under the game. State is never
-   reset here: score, hunt, wrap, pause and the snake's LENGTH survive —
-   if the snake no longer fits it is relocated, not restarted. */
+   reset here: hunt, wrap, pause and the snake's LENGTH survive — if the
+   snake no longer fits it is relocated, not restarted. */
 static void sanitize_after_resize(Game *g) {
     int oob = 0;
     for (int i = 0; i < g->snake.len; i++) {
@@ -473,11 +652,10 @@ static void sanitize_after_resize(Game *g) {
     }
     if (oob) {
         int keep_len = g->snake.len;
-        int keep_score = g->score, keep_wrap = g->wrap, keep_hunt = g->hunt;
+        int keep_wrap = g->wrap, keep_hunt = g->hunt;
         int keep_paused = g->paused, keep_alive = g->alive;
         game_init(g);
         relocate_snake(g, keep_len);
-        g->score = keep_score;
         g->wrap = keep_wrap;
         g->hunt = keep_hunt;
         g->paused = keep_paused;
@@ -486,9 +664,16 @@ static void sanitize_after_resize(Game *g) {
     /* food that ended up outside the new board, or under the relocated
        snake, is re-rolled */
     for (int i = 0; i < FOOD_COUNT; i++)
-        if (g->food[i].x >= BOARD_W || g->food[i].y >= BOARD_H ||
-            snake_contains(&g->snake, g->food[i], 0))
+        if (!in_bounds(g->food[i]) || snake_contains(&g->snake, g->food[i]))
             spawn_food(g, i);
+
+    /* a corpse stranded outside the shrunken board just stops bleeding out
+       (a relocation wipes the whole corpse, since game_init memsets it) */
+    int keep = 0;
+    for (int i = 0; i < g->snake.wound_len; i++)
+        if (g->snake.wound[i].ttl > 0 && in_bounds(g->snake.wound[i].p))
+            g->snake.wound[keep++] = g->snake.wound[i];
+    g->snake.wound_len = keep;
 }
 
 /* returns 0 to quit. Deliberately lowercase-only keys — one key, one job. */
@@ -507,6 +692,7 @@ static int handle_key(Game *g, int ch) {
             g->pending_count = 0;
             break;
         case 'r':
+            save_highscore(g->snake.len);   /* bank the run before wiping it */
             game_init(g);
             break;
         case KEY_UP:
@@ -565,8 +751,9 @@ int main(void) {
         while ((ch = getch()) != ERR) {
             input_seen = 1;
             if (!handle_key(&g, ch)) {
+                save_highscore(g.snake.len);
                 endwin();
-                printf("final score: %d\n", g.score);
+                printf("final length: %d\n", g.snake.len);
                 return 0;
             }
         }
@@ -574,7 +761,10 @@ int main(void) {
         long now = now_ms();
         if (now >= next_tick) {
             game_step(&g);
-            if (was_alive && !g.alive) save_highscore(g.score);
+            if (was_alive && !g.alive) {
+                save_highscore(g.snake.len);
+                load_highscore(&highscore); /* keep the header honest */
+            }
             was_alive = g.alive;
             next_tick = now + tick_delay_ms(&g);
             draw(&g, highscore);
