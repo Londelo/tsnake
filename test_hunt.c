@@ -15,8 +15,8 @@ int main(void) {
     printf("head=(%d,%d) dir=(%d,%d) food=[%d,%d %d,%d %d,%d]\n",
            g.snake.cells[g.snake.head].x, g.snake.cells[g.snake.head].y,
            g.dir[0], g.dir[1],
-           g.food[0].x, g.food[0].y, g.food[1].x, g.food[1].y,
-           g.food[2].x, g.food[2].y);
+           g.food[0].p.x, g.food[0].p.y, g.food[1].p.x, g.food[1].p.y,
+           g.food[2].p.x, g.food[2].p.y);
 
     for (int tick = 0; tick < 200 && g.alive; tick++) {
         int d[2];
