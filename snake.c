@@ -28,6 +28,14 @@
 #define FLASH_TICKS 10    /* ticks the border stays green after eating (~0.5s) */
 #define WOUND_FADE 55     /* ticks a severed cell stays red before vanishing (~3s) */
 
+/* Game speed: ONE constant tick per run. Speed deliberately does NOT scale with
+   progress — tying it to the old score made the snake feel faster as it grew, and
+   that read as a bug. TICK_MS is only the DEFAULT: the player picks the run's tick
+   on the setup card (protocol `speed`) and it never moves again mid-run. */
+#define TICK_MS 55
+#define MIN_TICK_MS 20      /* ~2.75x; below this the BFS/pipe can't keep up honestly */
+#define MAX_TICK_MS 200     /* ~0.28x; above this it reads as a frozen game */
+
 /* board size is derived from the terminal on startup and on SIGWINCH */
 static int BOARD_W = 40;
 static int BOARD_H = 20;
@@ -113,6 +121,10 @@ typedef struct {
     int paused;
     int wrap;
     int hunt;              /* auto-hunt mode: AI steers to nearest food */
+    int started;           /* 0 until the setup card's START. A run that has not
+                              begun cannot be stepped, steered, or re-tuned: the
+                              setup card is the only place settings are editable */
+    int tick_ms;           /* THIS run's tick; TICK_MS is only its default */
 } Game;
 
 static int rng(int limit) {
@@ -435,6 +447,11 @@ static void game_init(Game *g) {
     }
     g->dir[0] = 1; g->dir[1] = 0;
     g->alive = 1;
+    /* A game is startable the moment it exists — EXCEPT under --protocol, where
+       protocol_run() drops started back to 0 so the overlay can put up its setup
+       card first. The curses face never sees started == 0. */
+    g->started = 1;
+    g->tick_ms = TICK_MS;
 
     /* the game's own tokens: respawned when eaten */
     g->food_n = FOOD_COUNT;
@@ -685,7 +702,7 @@ static int hunt_step(Game *g, int out[2]) {
 static void game_step(Game *g) {
     Snake *s = &g->snake;
 
-    if (g->paused || !g->alive) return;
+    if (g->paused || !g->alive || !g->started) return;
     if (g->flash > 0) g->flash--;
 
     /* a severed cell is a live thing for WOUND_FADE ticks (see WoundCell) */
@@ -714,13 +731,10 @@ static void game_step(Game *g) {
     for (int k = 0; k < steps && g->alive; k++) advance_one(g);
 }
 
-/* game speed: a constant tick. Speed deliberately does NOT scale with
-   progress — tying it to the old score made the snake feel faster as it
-   grew. Keep it constant. */
-#define TICK_MS 55
+/* The run's tick, chosen on the setup card. Constant for the whole run: this is
+   the one place the delay is read, and nothing here looks at length or score. */
 static int tick_delay_ms(const Game *g) {
-    (void)g;
-    return TICK_MS;
+    return g->tick_ms;
 }
 
 /* floating centered menu for the pause / game-over screens: blanks its
@@ -1126,9 +1140,11 @@ static int emit_frame(const Game *g, long tick) {
     Point head = g->snake.cells[g->snake.head];
     printf("{\"event\":\"frame\",\"tick\":%ld,\"w\":%d,\"h\":%d,"
            "\"alive\":%d,\"paused\":%d,\"wrap\":%d,\"hunt\":%d,"
+           "\"started\":%d,\"speed\":%d,"
            "\"flash\":%d,\"len\":%d,\"best\":%d,"
            "\"dir\":[%d,%d],\"head\":{\"x\":%d,\"y\":%d},\"body\":[",
            tick, BOARD_W, BOARD_H, g->alive, g->paused, g->wrap, g->hunt,
+           g->started, g->tick_ms,
            g->flash, g->snake.len, best_len, g->dir[0], g->dir[1], head.x, head.y);
 
     for (int i = 0; i < g->snake.len; i++) {
@@ -1163,6 +1179,7 @@ static int handle_command(Game *g, const char *line) {
     if (!json_string(line, "cmd", cmd, sizeof(cmd))) return 1;
 
     if (strcmp(cmd, "dir") == 0) {
+        if (!g->started) return 1;               /* before START, nothing steers */
         int dx = 0, dy = 0;
         if (!json_int(line, "dx", &dx) || !json_int(line, "dy", &dy)) return 1;
         int axis_ok = (dy == 0 && (dx == 1 || dx == -1)) ||
@@ -1182,18 +1199,54 @@ static int handle_command(Game *g, const char *line) {
         return 1;
     }
     if (strcmp(cmd, "pause") == 0) {
-        if (g->alive) g->paused = !g->paused;
+        if (g->started && g->alive) g->paused = !g->paused;
         return 1;
     }
-    if (strcmp(cmd, "wrap") == 0) { g->wrap = !g->wrap; return 1; }
+    /* Wrap is a SETUP choice, which is what makes it a rule rather than a mood:
+       the moment the snake is moving these commands are ignored, so the overlay can
+       take the control away and still be telling the truth about it. `on` is the
+       absolute form the card uses; bare `wrap` keeps toggling for any client that
+       already knows the state. */
+    if (strcmp(cmd, "wrap") == 0) {
+        if (g->started) return 1;
+        int on = -1;
+        if (json_int(line, "on", &on) && (on == 0 || on == 1)) g->wrap = on;
+        else g->wrap = !g->wrap;
+        return 1;
+    }
+    if (strcmp(cmd, "speed") == 0) {
+        if (g->started) return 1;                /* in-game: the speed is decided */
+        int ms = 0;
+        if (!json_int(line, "ms", &ms)) return 1;
+        /* the clamp lives HERE, not in the UI: a client that sends 0 must not get a
+           busy-spinning tick loop, and one that sends 100000 must not look frozen */
+        if (ms < MIN_TICK_MS) ms = MIN_TICK_MS;
+        if (ms > MAX_TICK_MS) ms = MAX_TICK_MS;
+        g->tick_ms = ms;
+        return 1;
+    }
+    if (strcmp(cmd, "start") == 0) {
+        g->started = 1;
+        g->paused = 0;                           /* START means go, never "go paused" */
+        g->pending_count = 0;                    /* no lean queued before the run began */
+        return 1;
+    }
     if (strcmp(cmd, "hunt") == 0) {
+        if (!g->started) return 1;
         g->hunt = !g->hunt;
         g->pending_count = 0;
         return 1;
     }
     if (strcmp(cmd, "restart") == 0) {
         save_highscore(g->snake.len);            /* banks; no write under --protocol */
+        /* game_init memsets the whole Game, so the setup has to be carried across on
+           purpose: a restart replays under the wrap and speed the player chose, and
+           a restart while still on the setup card stays on the setup card. */
+        int keep_started = g->started, keep_wrap = g->wrap, keep_ms = g->tick_ms;
         game_init(g);
+        g->started = keep_started;
+        g->wrap = keep_wrap;
+        g->tick_ms = keep_ms;
         return 1;
     }
     if (strcmp(cmd, "size") == 0) {
@@ -1236,6 +1289,10 @@ static int protocol_run(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     Game g;
     game_init(&g);
+    /* The player has not said START yet. Everything about the run — wrap, speed —
+       is editable until the card hands it over, and nothing moves until then; the
+       frames keep flowing so the card paints from real state. */
+    g.started = 0;
     load_highscore(&best_len);
 
     char line[256];
