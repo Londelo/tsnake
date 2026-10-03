@@ -123,7 +123,55 @@ Item {
   property int frameSerial: 0              // bump ⇒ repaint
   property bool gotFrame: false
 
+  // ------------------------------------------------------- the run's setup
+  // The setup card's two settings, and they are the ENGINE's numbers, read out of
+  // every frame — the card never keeps an opinion of its own. `started` is 0 until
+  // the player presses START; the engine will not advance, steer, pause, or re-tune
+  // a run that has not begun, and refuses wrap/speed edits once it has.
+  property int started: 0
+  property int tickMs: 55
+  // While the thumb is being dragged (and until the frame that confirms the edit
+  // arrives) this holds the value the player asked for. PanelSlider resets its knob
+  // to `value` the moment you let go, so without this the slider snaps back for a
+  // frame and looks broken.
+  property int askedMs: -1
+  // ...but only for a few frames. A command the engine never honours — a speed edit
+  // sent after START, which it is entitled to ignore — must not strand the knob at a
+  // value that does not exist.
+  property int askedGraces: 0
+  // snake.c's TICK_MS. One copy in this file: the slider is authored in multiples
+  // of it, so 1.0× means "the speed the game has always had".
+  readonly property int baseTickMs: 55
+  readonly property int shownMs: root.askedMs >= 0 ? root.askedMs : root.tickMs
+  readonly property real speedMult: root.shownMs > 0 ? root.baseTickMs / root.shownMs : 1.0
+  // The slider's ends, in multiples: half speed to double speed, 1.0× in the middle.
+  // The engine's own guards (MIN/MAX_TICK_MS in snake.c) sit OUTSIDE this range, so a
+  // thumb that cannot leave [0.5×, 2×] can never press against them.
+  readonly property real speedLo: 0.5
+  readonly property real speedHi: 2.0
+
+  // The slider speaks multiples because that is what a player can reason about; the
+  // engine speaks milliseconds because that is what a tick is. This is the only
+  // translation between the two, and it is deliberately one-directional per call.
+  function msForMult(m) {
+    var clamped = Math.max(root.speedLo, Math.min(root.speedHi, m))
+    return Math.round(root.baseTickMs / clamped)
+  }
+
+  // Both numbers in this string are derived from the SAME millisecond value, so the
+  // "×" and the "ms" can never contradict each other (they would if the multiple were
+  // snapped to the slider's detents independently: 41 ms is 1.34×, not 1.35×).
+  readonly property string speedLabel: {
+    var t = root.speedMult.toFixed(2) + "×   " + root.shownMs + " ms"
+    return root.shownMs === root.baseTickMs ? t + "   (default)" : t
+  }
+
   readonly property bool menuUp: root.opened && (root.alive === 0 || root.paused === 1)
+  // The card is up while a real engine is talking and the run has not begun. The
+  // gotFrame term matters: before the first frame `started` is 0 by default, and a
+  // card over a blank board with a broken engine underneath would be a lie.
+  readonly property bool setupUp: root.opened && root.gotFrame && root.started === 0
+                                 && root.alive === 1 && !root.engineFailed
 
   // --------------------------------------------------- exactly one cell map
   // Drawing and click→board mapping both go through boardLeft/boardTop/
@@ -311,6 +359,40 @@ Item {
     root.best = 0
     root.dirX = 1
     root.dirY = 0
+    // A fresh engine is a fresh setup: it has not been started, and it is running
+    // at the default tick, whatever the last run had been set to.
+    root.started = 0
+    root.tickMs = root.baseTickMs
+    root.askedMs = -1
+  }
+
+  // ------------------------------------------------------- setup card actions
+  // Every one of these writes the ENGINE and waits for the frame to say it took.
+  // The terminal build's `x` key still toggles wrap mid-run; the overlay's player
+  // chose wrap before START and cannot change it after, which is the whole point of
+  // putting it on a setup card.
+  function toggleWrap() {
+    if (root.started !== 0) return
+    root.send({ cmd: "wrap", on: root.wrapOn === 1 ? 0 : 1 })
+  }
+
+  // ms, not a multiple: the engine's unit is the tick, and the clamp that keeps a
+  // nonsense value from producing a busy-spin or a frozen game lives in snake.c.
+  // Deduped against the value already IN FLIGHT, not against root.tickMs: comparing
+  // to the engine's last-known tick would swallow a drag back toward the current
+  // speed and leave the readout naming the ms the thumb just left.
+  function setSpeed(ms) {
+    if (root.started !== 0) return
+    var want = Math.round(ms)
+    if (want === root.askedMs) return
+    root.askedMs = want
+    root.askedGraces = 3
+    root.send({ cmd: "speed", ms: want })
+  }
+
+  function startRun() {
+    root.send({ cmd: "start" })
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   function onFrameLine(line) {
@@ -337,6 +419,23 @@ Item {
     root.best = f.best | 0
     root.dirX = (f.dir && f.dir.length > 0) ? (f.dir[0] | 0) : 1
     root.dirY = (f.dir && f.dir.length > 1) ? (f.dir[1] | 0) : 0
+    root.started = f.started | 0
+    if ((f.speed | 0) > 0) {
+      root.tickMs = f.speed | 0
+      // The engine's answer has caught up with the drag: hand the knob back to the
+      // real number. An edit the engine refused (a speed sent after START, say) runs
+      // out of graces and the knob goes back to the truth — but not mid-drag, where
+      // a per-frame decrement would make the readout flicker under the thumb.
+      if (root.askedMs >= 0) {
+        if (root.askedMs === root.tickMs) {
+          root.askedMs = -1
+          root.askedGraces = 0
+        } else if (!speedSlider.dragging && --root.askedGraces <= 0) {
+          root.askedMs = -1
+          root.askedGraces = 0
+        }
+      }
+    }
     root.bodyPts = f.body || []
     root.woundPts = f.wound || []
     root.foodPts = f.food || []
@@ -608,7 +707,12 @@ Item {
         width: parent.width
         height: root.helpHeight
         textFormat: Text.PlainText
-        text: "arrows move · h auto-hunt · x wrap · p pause · r restart · q quit"
+        // Two different key sets, because there are two different games up here: the
+        // setup card answers `q` and the mouse, and naming `arrows`/`h`/`p`/`r` while
+        // the run has not begun would advertise keys that are wired to nothing.
+        text: root.started === 0
+              ? "set wrap and speed, then START   ·   q quit"
+              : "arrows move · h auto-hunt · p pause · r restart · q quit"
         color: Color.menu.text.toString()
         opacity: 0.65
         font.family: Style.font.menuFamily
@@ -620,6 +724,179 @@ Item {
 
     // Menu overlays live OUTSIDE the column, so a panel never resizes the
     // board underneath it and reflows no cells mid-death.
+    //
+    // ---------------------------------------------------------------- setup card
+    // What this run IS, chosen before it begins: settings on top, START at the
+    // bottom. Wrap and speed live HERE and nowhere else — after START the engine
+    // refuses both (snake.c: `if (g->started) return 1;`), so a control that
+    // outlived the card would be claiming a power it no longer has. The snake sits
+    // on the board behind it, painted and still: the engine is ticking, it just will
+    // not advance an unstarted run, and the clicks that place food before the go
+    // signal are kept — placing a token is telling the AI where to eat, not steering.
+    Rectangle {
+      id: setupPanel
+      visible: root.setupUp
+      anchors.centerIn: parent        // see pausePanel: boardArea is not a valid anchor target
+      width: root.menuWidth(boardArea.width)
+      height: setupColumn.implicitHeight + root.cardPadding
+      radius: Style.cornerRadius
+      color: Color.menu.background.toString()
+      border.color: Color.menu.border.toString()
+      border.width: 1
+
+      Column {
+        id: setupColumn
+        anchors.centerIn: parent
+        width: parent.width - Style.space(24)
+        spacing: Style.spacing.lg
+
+        Text {
+          textFormat: Text.PlainText
+          text: "SET UP YOUR RUN"
+          color: Color.menu.selectedText.toString()
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.display
+          font.bold: true
+          horizontalAlignment: Text.AlignHCenter
+          width: parent.width
+        }
+
+        // WRAP. The switch is drawn from the ENGINE's flag, never from a click count:
+        // if the frame says wrap is off, the switch says off, whatever was clicked.
+        Item {
+          width: parent.width
+          height: Math.max(Style.space(46), wrapSwitch.height)
+
+          Column {
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.spacing.xs
+
+            Text {
+              textFormat: Text.PlainText
+              text: "WRAP"
+              color: Color.menu.selectedText.toString()
+              font.family: Style.font.menuFamily
+              font.pixelSize: Style.font.title
+              font.bold: true
+            }
+            Text {
+              textFormat: Text.PlainText
+              text: root.wrapOn === 1 ? "walls are doors; the far side opens"
+                                      : "walls kill, as they always have"
+              color: Color.menu.text.toString()
+              opacity: 0.75
+              font.family: Style.font.menuFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          ToggleSwitch {
+            id: wrapSwitch
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            checked: root.wrapOn === 1
+            onToggled: root.toggleWrap()
+          }
+        }
+
+        // SPEED. Left is slower, right is faster, and the middle is the speed this
+        // game has always had (55 ms) — so the default position is not a guess the
+        // player has to undo, it is where the thumb already sits.
+        Column {
+          width: parent.width
+          spacing: Style.spacing.xs
+
+          Item {
+            width: parent.width
+            height: Math.max(speedCaption.height, speedTitle.height)
+
+            Text {
+              id: speedTitle
+              textFormat: Text.PlainText
+              text: "SPEED"
+              color: Color.menu.selectedText.toString()
+              font.family: Style.font.menuFamily
+              font.pixelSize: Style.font.title
+              font.bold: true
+            }
+            Text {
+              id: speedCaption
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
+              text: root.speedLabel
+              color: Color.menu.text.toString()
+              font.family: Style.font.menuFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          PanelSlider {
+            id: speedSlider
+            width: parent.width
+            minimum: root.speedLo
+            maximum: root.speedHi
+            step: 0.05
+            value: Math.max(root.speedLo, Math.min(root.speedHi, root.speedMult))
+            // Named, not defaulted. PanelSlider has no bar to inherit from outside a
+            // Panel, and its no-bar fallbacks are hardcoded dark greys — on this
+            // menu-coloured card the track would be invisible in a light theme.
+            trackColor: Color.menu.border
+            fillColor: Color.menu.selectedText
+            knobColor: Color.menu.selectedText
+
+            // moved, not just released: the readout has to follow the thumb, and the
+            // engine takes a tick change cheaply. setSpeed() drops a value that is
+            // already in flight, so a drag across detents is not a write storm.
+            onMoved: function(v) { root.setSpeed(root.msForMult(v)) }
+            onReleased: function(v) { root.setSpeed(root.msForMult(v)) }
+          }
+
+          // Which end is which, said once, in the pixels the slider has. An Item with
+          // two anchored labels, deliberately not a Row: a Row sets x on its children,
+          // which is the thing `anchors.right` contradicts.
+          Item {
+            width: parent.width
+            height: fastCaption.height
+
+            Text {
+              textFormat: Text.PlainText
+              text: "slow"
+              color: Color.menu.text.toString()
+              opacity: 0.6
+              font.family: Style.font.menuFamily
+              font.pixelSize: Style.font.caption
+            }
+            Text {
+              id: fastCaption
+              anchors.right: parent.right
+              textFormat: Text.PlainText
+              text: "fast"
+              color: Color.menu.text.toString()
+              opacity: 0.6
+              font.family: Style.font.menuFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+        }
+
+        // START — the bottom of the card, and the only thing that gets the snake
+        // moving. Mouse on purpose: this is a decision, not a key to mash past.
+        Button {
+          id: startButton
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: "START"
+          selected: true
+          fontSize: Style.font.title
+          horizontalPadding: Style.space(30)
+          onClicked: root.startRun()
+        }
+        // No key hint under the button: the help row under the board already names
+        // `q quit` for this state, and saying it twice in one window is noise.
+      }
+    }
+
     Rectangle {
       id: pausePanel
       visible: root.opened && root.alive === 1 && root.paused === 1
@@ -799,6 +1076,17 @@ Item {
           return
         }
 
+        // Before START the card owns the window: the snake does not move, so steering
+        // keys have nothing to steer and `h`/`p`/`r` all name a run that does not
+        // exist yet. Only quitting is real — the mouse has the settings, and a player
+        // who summoned the game by mistake must always be able to put it back down.
+        if (root.started === 0) {
+          var ch0 = (event.text && event.text.length === 1) ? event.text : ""
+          if (ch0 === "q" || event.key === Qt.Key_Escape) root.dismiss()
+          event.accepted = true
+          return
+        }
+
         var k = event.key
         var dirCmd = null
         if (k === Qt.Key_Left) dirCmd = { cmd: "dir", dx: -1, dy: 0 }
@@ -821,7 +1109,10 @@ Item {
         var ch = (event.text && event.text.length === 1) ? event.text : ""
         if (ch === "h") root.send({ cmd: "hunt" })
         else if (ch === "p") root.send({ cmd: "pause" })
-        else if (ch === "x") root.send({ cmd: "wrap" })
+        // No `x` here any more, though snake.c still answers it in the terminal
+        // build. Wrap is a decision about what the run IS, and the setup card is the
+        // only place that gets to make it; mid-run it is locked (the engine refuses
+        // the command once started), so a key for it would be a control that lies.
         else if (ch === "r") root.send({ cmd: "restart" })
         // q fully unmounts rather than merely hiding: close() stops the engine
         // and drops the surface, but leaves the host's openPanelIds holding this
