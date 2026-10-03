@@ -8,12 +8,18 @@ snake: snake.c
 test_hunt: test_hunt.c snake.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
 
-clean:
-	rm -f snake test_hunt
+test_game: test_game.c snake.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
 
-.PHONY: clean run test
+clean:
+	rm -f snake test_hunt test_game
+
+.PHONY: clean run test unit
 run: snake
 	./snake
 
 test: test_hunt
 	./test_hunt
+
+unit: test_game
+	./test_game
