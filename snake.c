@@ -227,6 +227,56 @@ static void flush_state(void) {
     pending_best = 0;
 }
 
+/* The shell can take the overlay's Loader down without asking: a plugin reload,
+   a bar-config change, a logout. Quickshell's Process destructor then SIGTERMs
+   the child, which with the default disposition dies with the banked best still
+   in RAM — and the overlay's own quit may still be sitting unread in the pipe
+   buffer, because a process blocked in poll() never gets to it. Losing a run
+   that way is indistinguishable from the feature never working, so the
+   terminators write the file themselves, with async-signal-safe calls only:
+   open/write/mkdir/close and the digits laid out by hand. No stdio, no malloc,
+   no load_highscore — none of those are safe to call from a handler.
+   Installed in protocol mode only; the terminal build writes as it plays, so it
+   keeps nothing in RAM that a signal could strand. */
+static void terminate_handler(int sig) {
+    (void)sig;
+    const char *path = highscore_path();
+    int v = best_len;
+    if (pending_best > v) v = pending_best;
+    if (path && path[0] && v > 0) {
+        char digits[16], buf[24];
+        int n = 0, m = 0;
+        do { digits[n++] = (char)('0' + v % 10); v /= 10; } while (v > 0);
+        while (n > 0) buf[m++] = digits[--n];
+        buf[m++] = '\n';
+        /* best-effort parent creation, mkdir() alone: the first save of a dying
+           process must still land if the overlay's state dir is missing */
+        char dir[512];
+        int i = 0;
+        while (path[i] && i < (int)sizeof(dir) - 1) { dir[i] = path[i]; i++; }
+        dir[i] = 0;
+        while (i > 0 && dir[i - 1] != '/') i--;
+        if (i > 1) {
+            dir[i - 1] = 0;                        /* drop the trailing slash */
+            for (int j = 1; dir[j]; j++) {
+                if (dir[j] != '/') continue;
+                char held = dir[j];
+                dir[j] = 0;
+                mkdir(dir, 0700);
+                dir[j] = held;
+            }
+            mkdir(dir, 0700);
+        }
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+        if (fd >= 0) {
+            ssize_t wrote = write(fd, buf, (size_t)m);
+            (void)wrote;
+            close(fd);
+        }
+    }
+    _exit(0);
+}
+
 static void snake_init(Snake *s) {
     s->head = 0;
     s->len = 0;
@@ -1178,6 +1228,11 @@ static int protocol_run(void) {
        SIGPIPE that would otherwise kill the process mid-frame — and, worse for
        the save file, before flush_state ever ran. */
     signal(SIGPIPE, SIG_IGN);
+    /* The overlay asks the engine to stop; the shell often does not wait for the
+       answer. Without these, being killed is the one way to lose a run. */
+    signal(SIGTERM, terminate_handler);
+    signal(SIGHUP, terminate_handler);
+    signal(SIGINT, terminate_handler);
     setvbuf(stdout, NULL, _IOLBF, 0);
     Game g;
     game_init(&g);
