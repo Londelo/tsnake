@@ -21,6 +21,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -97,11 +98,49 @@ static void keep_scratch(const char *p) {
         scratch[scratch_n++] = strdup(p);
 }
 
+/* Every call gets ITS OWN string. Callers hold these across later calls — the
+   symlink rig keeps `victim` alive while it asks for `link` — so a shared
+   static buffer would quietly rewrite the first name under the second: both
+   pointers end up reading the last leaf, the symlink is planted on itself, and
+   the victim file "disappears" from under the reader that is checking it was
+   never clobbered. The precisions are what keep -Wformat-truncation quiet:
+   run_dir is a fixed array and every leaf here is short, so the result always
+   fits. */
 static char *scratch_path(const char *leaf) {
-    static char path[256];
-    snprintf(path, sizeof path, "%s/%s", run_dir, leaf);
-    keep_scratch(path);
-    return path;
+    char path[1024];
+    snprintf(path, sizeof path, "%.300s/%.300s", run_dir, leaf);
+    char *own = strdup(path);
+    if (!own) { fprintf(stderr, "scratch_path: out of memory\n"); exit(1); }
+    keep_scratch(own);                          /* the cleanup list keeps a copy */
+    return own;
+}
+
+/* Remove run_dir for good. The unlink loop in main() can only retire the
+   leaves a test registered with keep_scratch(), and that is not everything the
+   run creates: flush_state()/write_best_file() mkdir -p their own parent chain,
+   so `nested/deeper` and `made/by/ensure` exist once the save-data suite has
+   run, and the highscore files the engine writes were never registered (the
+   rig unlinks that name BEFORE creating it, to prove it starts absent). So
+   rmdir(run_dir) always failed and every single run left a
+   /tmp/tsnake_unit_<pid> behind — precisely the litter this file promises not
+   to make. lstat, never stat: a planted symlink must be unlinked as the link it
+   is, not followed into somebody else's tree. Depth-bounded, and main() calls
+   it only on a path this binary built under /tmp. */
+static void wipe_dir(const char *path, int depth) {
+    if (depth < 0) return;
+    DIR *d = opendir(path);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char child[1024];
+        snprintf(child, sizeof child, "%.500s/%.400s", path, e->d_name);
+        struct stat st;
+        if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode)) wipe_dir(child, depth - 1);
+        else unlink(child);
+    }
+    closedir(d);
+    rmdir(path);
 }
 
 /* The rules read file-scope globals — BOARD_W/BOARD_H, square_cells,
@@ -133,9 +172,24 @@ static void blank_game(Game *g) {
 }
 
 /* Lay the live body out exactly as given: tail first, head LAST (snake_push is
- * push-at-tail, so the last cell pushed is the head). */
+ * push-at-tail, so the last cell pushed is the head). Write the literal in that
+ * order — {tail, ..., head} — or the rig runs backwards from the one the test
+ * thinks it built.
+ * snake_init() also zeroes wound_len, so a second set_body DELETES any corpse
+ * already in the queue; use set_body_keeping_wounds when the corpse is the
+ * subject of the test. */
 static void set_body(Game *g, const Point *pts, int n) {
     snake_init(&g->snake);
+    for (int i = 0; i < n; i++) snake_push(&g->snake, pts[i]);
+}
+
+/* Same layout, same tail-first/head-last order, but the severed queue is left
+ * exactly as it was: this is the rig for "a second bite behind a live one",
+ * where wiping the corpse would delete the thing being asserted about. Only
+ * head/len are reset, which is all snake_push needs to start a fresh body. */
+static void set_body_keeping_wounds(Game *g, const Point *pts, int n) {
+    g->snake.head = 0;
+    g->snake.len = 0;
     for (int i = 0; i < n; i++) snake_push(&g->snake, pts[i]);
 }
 
@@ -248,9 +302,22 @@ static void test_vacating_tail_tip_is_not_a_bite(void) {
     CHECK_EQ(g.snake.len, 4);              /* push+pop: length unchanged */
     CHECK_EQ(g.snake.cells[g.snake.head].x, 1);
     CHECK_EQ(g.snake.cells[g.snake.head].y, 1);
-    /* the body moved as a whole: (2,1) shed, (1,1) is the head */
+    /* The body ROTATED rather than travelled, and that is what a closed loop
+     * does: the cell it shed, the old tail tip (1,1), is the very cell the head
+     * has just landed on, so all four cells of the 2x2 are still occupied and
+     * NONE of them reads free. depth counts from the new head, so the cell the
+     * head came from, (2,1), is depth 1 — still part of the snake. Reading -1
+     * there (the rig's original mistake) asked for the head's own neck to have
+     * vanished; "the tail tip frees up" belongs to an ordinary step, and
+     * test_head_flies_over_shed_cells is where that is proved. */
     CHECK_EQ(snake_chain_depth(&g.snake, (Point) { 1, 1 }), 0);
-    CHECK_EQ(snake_chain_depth(&g.snake, (Point) { 2, 1 }), -1);
+    CHECK_EQ(snake_chain_depth(&g.snake, (Point) { 2, 1 }), 1);
+    CHECK_EQ(snake_chain_depth(&g.snake, (Point) { 2, 2 }), 2);
+    CHECK_EQ(snake_chain_depth(&g.snake, (Point) { 1, 2 }), 3);
+    CHECK(snake_occupied(&g, (Point) { 1, 1 }));
+    CHECK(snake_occupied(&g, (Point) { 2, 1 }));
+    CHECK(snake_occupied(&g, (Point) { 2, 2 }));
+    CHECK(snake_occupied(&g, (Point) { 1, 2 }));
 }
 
 /* Food on a body cell is EATEN, not bitten into — the eat test runs first in
@@ -418,17 +485,34 @@ static void test_corpse_fades_after_wound_fade(void) {
     build_bite_rig(&g);
     advance_one(&g);
 
+    /* Both chunks are solid — and note WHICH reader proves it. This rig bites
+     * upward, so advance_one flew the head into the scar: (2,1) is the live HEAD
+     * cell as well as a corpse, and snake_occupied can never go false there
+     * while the snake is standing on it. snake_wound_contains is the reader that
+     * means "still bleeding"; (2,0) is corpse-only, so it carries the occupancy
+     * half of the invariant. */
     CHECK(snake_occupied(&g, (Point) { 2, 1 }));
+    CHECK(snake_wound_contains(&g.snake, (Point) { 2, 1 }));
     CHECK(snake_occupied(&g, (Point) { 2, 0 }));
+    CHECK(snake_wound_contains(&g.snake, (Point) { 2, 0 }));
 
     /* the bitten end (ttl WOUND_FADE/2) goes first, the tip (WOUND_FADE-1) last */
     for (int i = 0; i < WOUND_FADE / 2; i++) wound_tick(&g.snake);
     CHECK_EQ(g.snake.wound_len, 1);                 /* front drained */
-    CHECK(!snake_occupied(&g, (Point) { 2, 1 }));
-    CHECK(snake_occupied(&g, (Point) { 2, 0 }));
+    CHECK(!snake_wound_contains(&g.snake, (Point) { 2, 1 }));
+    CHECK(snake_contains(&g.snake, (Point) { 2, 1 }));   /* only the head holds it now */
+    CHECK(snake_occupied(&g, (Point) { 2, 0 }));    /* the tip is still bleeding */
 
     for (int i = 0; i < WOUND_FADE / 2; i++) wound_tick(&g.snake);
     CHECK_EQ(g.snake.wound_len, 0);                 /* board clean again */
+    CHECK(!snake_wound_contains(&g.snake, (Point) { 2, 1 }));
+    CHECK(!snake_occupied(&g, (Point) { 2, 0 }));   /* corpse-only cell: truly free */
+
+    /* five cells up the column and the head has vacated the bitten cell as
+     * well — only now does "not occupied" mean what it has to mean for (2,1),
+     * and five (not six: the column is 6 tall and the seam would hand the head
+     * straight back to it) leaves the whole 4-cell body clear of both. */
+    for (int i = 0; i < 5; i++) advance_one(&g);
     CHECK(!snake_occupied(&g, (Point) { 2, 1 }));
     CHECK(!snake_occupied(&g, (Point) { 2, 0 }));
 
@@ -463,17 +547,40 @@ static void test_expired_cell_midqueue_is_ignored(void) {
     CHECK(snake_wound_contains(&g.snake, (Point) { 3, 3 }));
     CHECK(!snake_occupied(&g, (Point) { 2, 2 }));
 
-    /* the front expires and drains; the dead middle cell stays put, unread */
+    /* The front expires and the drain takes the whole LEADING RUN of expired
+     * cells with it: once the head of the queue is gone there is nothing left to
+     * read the dead middle cell as, so compacting it out is the engine being
+     * tidy, not losing a live cell. It stops at the first ttl > 0, so nothing
+     * still bleeding is ever dropped — the survivor here is (3,3) and it is the
+     * only entry left, still at the front of the queue where readers look. */
     for (int i = 0; i < 6; i++) wound_tick(&g.snake);
-    CHECK_EQ(g.snake.wound_len, 2);
+    CHECK_EQ(g.snake.wound_len, 1);
     CHECK(!snake_occupied(&g, (Point) { 1, 1 }));
     CHECK(!snake_occupied(&g, (Point) { 2, 2 }));
     CHECK(snake_occupied(&g, (Point) { 3, 3 }));
+    CHECK_EQ(g.snake.wound[0].p.x, 3);
+    CHECK_EQ(g.snake.wound[0].p.y, 3);
 
     /* and once it catches up, the queue empties from the front as usual */
     for (int i = 0; i < 5; i++) wound_tick(&g.snake);
     CHECK_EQ(g.snake.wound_len, 0);
     CHECK(!snake_occupied(&g, (Point) { 3, 3 }));
+
+    /* The genuinely stuck case — the one the front drain cannot reach: the cell
+     * behind an expired middle is still COUNTING, so the drain stops before it
+     * and the dead entry sits in the middle of the queue indefinitely. This is
+     * where a reader that scanned by index instead of checking ttl would call a
+     * faded corpse solid forever. */
+    g.snake.wound[0].p = (Point) { 4, 4 }; g.snake.wound[0].ttl = 9;
+    g.snake.wound[1].p = (Point) { 5, 5 }; g.snake.wound[1].ttl = 0;
+    g.snake.wound[2].p = (Point) { 6, 3 }; g.snake.wound[2].ttl = 9;
+    g.snake.wound_len = 3;
+    for (int i = 0; i < 5; i++) wound_tick(&g.snake);   /* front still has 4 left */
+    CHECK_EQ(g.snake.wound_len, 3);                     /* drained nothing: correct */
+    CHECK(snake_occupied(&g, (Point) { 4, 4 }));        /* the live front holds */
+    CHECK(!snake_occupied(&g, (Point) { 5, 5 }));       /* stuck middle: unread */
+    CHECK(!snake_wound_contains(&g.snake, (Point) { 5, 5 }));
+    CHECK(snake_occupied(&g, (Point) { 6, 3 }));        /* and the live back holds */
 }
 
 /* A second bite while the first chunk is still bleeding out must add to the
@@ -485,17 +592,39 @@ static void test_second_bite_behind_a_live_one(void) {
     advance_one(&g);                                   /* first: (2,1),(2,0) */
     CHECK_EQ(g.snake.wound_len, 2);
 
-    /* build a second body elsewhere and bite it, while the first corpse counts */
-    Point body[] = {{6, 4}, {7, 4}, {7, 5}, {6, 5}, {5, 5}};
-    set_body(&g, body, 5);                             /* head (5,5) */
-    CHECK_EQ(g.snake.wound_len, 2);                    /* set_body must not drop it */
-    g.dir[0] = -1; g.dir[1] = 0;
-    advance_one(&g);                                   /* onto (6,5): depth 3 */
-    CHECK_EQ(g.snake.wound_len, 4);
-    CHECK(snake_occupied(&g, (Point) { 2, 1 }));        /* first still there */
-    CHECK(snake_occupied(&g, (Point) { 6, 5 }));        /* second added behind it */
-    CHECK(snake_occupied(&g, (Point) { 5, 5 }));        /* head moved onto the scar */
-    CHECK_EQ(g.snake.len, 2);
+    /* Build a second body elsewhere and bite it while the first corpse is still
+     * counting. set_body() runs snake_init, which zeroes wound_len — that would
+     * quietly delete the first chunk, the very thing under test — so the rig uses
+     * set_body_keeping_wounds. Same shape as the bite rig (a 2x2 loop with the
+     * head sticking out) shifted onto clear ground: tail->head
+     * (6,3),(6,4),(7,4),(7,5),(6,5), head (6,5) walking UP onto (6,4), which sits
+     * at chain depth 3 while len-1 is 4 — a mid-body bite that severs exactly the
+     * bitten cell and the tail tip, so the queue goes 2 -> 4 and the live body
+     * keeps depths 0..2 and then gains the head: len 4. */
+    Point body[] = {{6, 3}, {6, 4}, {7, 4}, {7, 5}, {6, 5}};
+    set_body_keeping_wounds(&g, body, 5);
+    CHECK_EQ(g.snake.wound_len, 2);                    /* the rig must not drop it */
+    g.dir[0] = 0; g.dir[1] = -1;
+    advance_one(&g);                                   /* onto (6,4): depth 3 */
+    CHECK_EQ(g.snake.wound_len, 4);                    /* ADDED, not clobbered */
+    /* appended behind the first chunk, in severing order, where they fell */
+    CHECK_EQ(g.snake.wound[2].p.x, 6);
+    CHECK_EQ(g.snake.wound[2].p.y, 4);
+    CHECK_EQ(g.snake.wound[3].p.x, 6);
+    CHECK_EQ(g.snake.wound[3].p.y, 3);
+    /* the first chunk survived: by now the head has left column 2 entirely, so
+       those two cells are held by NOTHING but the first corpse */
+    CHECK(snake_wound_contains(&g.snake, (Point) { 2, 1 }));
+    CHECK(snake_wound_contains(&g.snake, (Point) { 2, 0 }));
+    CHECK(snake_occupied(&g, (Point) { 2, 1 }));
+    CHECK(snake_occupied(&g, (Point) { 2, 0 }));
+    /* and the second chunk is solid on its own account: (6,3) is pure corpse,
+       (6,4) is the scar the head flew into */
+    CHECK(snake_occupied(&g, (Point) { 6, 3 }));
+    CHECK(snake_wound_contains(&g.snake, (Point) { 6, 4 }));
+    CHECK_EQ(g.snake.cells[g.snake.head].x, 6);
+    CHECK_EQ(g.snake.cells[g.snake.head].y, 4);
+    CHECK_EQ(g.snake.len, 4);
     /* both chunks still fade independently */
     for (int i = 0; i < WOUND_FADE; i++) wound_tick(&g.snake);
     CHECK_EQ(g.snake.wound_len, 0);
@@ -617,18 +746,37 @@ static void test_stride_checks_both_cells(void) {
     Game g;
     int w = BOARD_W;
 
-    /* head at (w-3,2) heading right: stride is (w-2,2) then (w-1,2), the wall */
+    /* Case 1 — the head is at (w-2,2), so the stride's SECOND cell is off the
+     * board. The first cell, (w-1,2), is perfectly legal, and that is exactly
+     * what a one-cell check called "free": the tick ends in the wall, a death.
+     * (w-1,2) is the last COLUMN, not the wall — the wall is one further out —
+     * so the rig has to park the head right up against the edge to reach it.) */
     blank_game(&g);
-    Point b[] = {{w - 5, 2}, {w - 4, 2}, {w - 3, 2}};
+    Point b_wall[] = {{w - 5, 2}, {w - 4, 2}, {w - 3, 2}, {w - 2, 2}};
+    set_body(&g, b_wall, 4);                            /* head (w-2,2) = (8,2) */
+    tokens_far(&g);
+    CHECK_EQ(g.snake.cells[g.snake.head].x, w - 2);
+    CHECK(!hunt_stride_free(&g, g.snake.cells[g.snake.head], 1, 0, NULL));
+
+    /* Case 2 — one cell further from the wall: the same direction is free,
+     * because both cells of the stride are on the board and clear of the body. */
+    blank_game(&g);
+    Point b[] = {{w - 6, 2}, {w - 5, 2}, {w - 4, 2}};   /* head (w-4,2) = (6,2) */
     set_body(&g, b, 3);
     tokens_far(&g);
     Point head = g.snake.cells[g.snake.head];
-    CHECK_EQ(head.x, w - 3);
-    CHECK(!hunt_stride_free(&g, head, 1, 0, NULL));   /* 1st free, 2nd = wall */
-    /* one cell further from the wall and the whole stride is free */
-    CHECK(hunt_stride_free(&g, (Point) { w - 4, 2 }, 1, 0, NULL));
-    /* left: only one cell, it is free */
-    CHECK(hunt_stride_free(&g, head, -1, 0, NULL));
+    CHECK_EQ(head.x, w - 4);
+    CHECK(hunt_stride_free(&g, head, 1, 0, NULL));
+    /* Left from the same head is a TWO-cell stride too — and both of its cells
+     * are the body, so it is not free either. "Horizontal" is two cells in BOTH
+     * directions, not just the one the snake is travelling. */
+    CHECK(!hunt_stride_free(&g, head, -1, 0, NULL));
+    /* and left with clear ground ahead of it IS free (body to the RIGHT here) */
+    blank_game(&g);
+    Point b_left[] = {{7, 2}, {6, 2}, {5, 2}};           /* tail (7,2) ... head (5,2) */
+    set_body(&g, b_left, 3);
+    tokens_far(&g);
+    CHECK(hunt_stride_free(&g, g.snake.cells[g.snake.head], -1, 0, NULL));
     /* up: vertical is one cell, so the off-board cell two up is irrelevant */
     blank_game(&g);
     Point b2[] = {{4, 3}, {4, 2}, {4, 1}};
@@ -640,18 +788,32 @@ static void test_stride_checks_both_cells(void) {
 
     /* own body as the stride's second cell — a corpse counts as much as a live
      * segment does, since it is still a wall in the middle of the board */
+    /* The head sits at (4,2) with its body running DOWN from it, so the whole
+     * rightward stride (5,2),(6,2) is ground the snake does not occupy and the
+     * only thing that can block it is a corpse. That separation is the point:
+     * with the body laid along the stride, as this rig used to be, the live
+     * segments answered for the block and the corpse proved nothing. */
     blank_game(&g);
-    Point b3[] = {{6, 2}, {5, 2}, {4, 2}};           /* head (4,2) */
+    Point b3[] = {{4, 4}, {4, 3}, {4, 2}};           /* tail (4,4) ... head (4,2) */
     set_body(&g, b3, 3);
     tokens_far(&g);
-    g.snake.wound[0].p = (Point) { 6, 2 };            /* already live body */
+    g.snake.wound[0].p = (Point) { 6, 2 };            /* ONLY the far cell */
     g.snake.wound[0].ttl = WOUND_FADE;
     g.snake.wound_len = 1;
+    /* the near cell is free and the far one is a corpse: still not free. This is
+     * the exact case a one-cell check used to call legal. */
+    CHECK(!hunt_stride_free(&g, (Point) { 4, 2 }, 1, 0, NULL));
+    g.snake.wound[1].p = (Point) { 5, 2 };            /* now the whole stride */
+    g.snake.wound[1].ttl = WOUND_FADE;
+    g.snake.wound_len = 2;
     CHECK(!hunt_stride_free(&g, (Point) { 4, 2 }, 1, 0, NULL));  /* (5,2),(6,2)=corpse */
-    CHECK(hunt_stride_free(&g, (Point) { 4, 2 }, 0, 1, NULL));    /* (4,3): fine */
-    g.snake.wound[0].ttl = 0;                                       /* faded */
-    g.snake.wound[0].p = (Point) { 9, 5 };                          /* elsewhere */
+    CHECK(hunt_stride_free(&g, (Point) { 4, 2 }, 0, -1, NULL));   /* (4,1): fine */
+    g.snake.wound[0].ttl = 0;                                       /* both faded */
+    g.snake.wound[1].ttl = 0;
     CHECK(hunt_stride_free(&g, (Point) { 4, 2 }, 1, 0, NULL));     /* both free now */
+    /* a ttl-0 corpse must not be a wall: it is still in the queue, unread */
+    CHECK_EQ(g.snake.wound_len, 2);
+    CHECK(!snake_occupied(&g, (Point) { 6, 2 }));
 
     /* the seam is part of the stride too: from the last column heading right the
      * two cells are (0,y) and (1,y), so blocking (1,y) blocks the stride */
@@ -724,7 +886,14 @@ static void test_stride_is_what_the_snake_actually_travels(void) {
     g.dir[0] = 1; g.dir[1] = 0;
     game_step(&g);                                     /* one tick, two cells */
     CHECK_EQ(g.snake.cells[g.snake.head].x, 4);
-    CHECK_EQ(g.food_n, 0);                             /* eaten, and it was the player's */
+    /* Eaten — and the player's token really is spent (no respawn in place), but
+     * food_n does NOT read 0: ensure_food immediately tops the board back up with
+     * one of the GAME's own tokens, because a board with no tokens is a dead game
+     * twice over (nothing to grow on, and no seeds for the hunt AI's field). So
+     * "it was the player's" is proved by WHICH token is on the board now. */
+    CHECK_EQ(g.food_n, 1);
+    CHECK_EQ(g.food[0].placed, 0);                     /* the game's, not theirs */
+    CHECK(!(g.food[0].p.x == 4 && g.food[0].p.y == 2)); /* never under the head */
     CHECK_EQ(g.snake.len, 2);
 
     world_reset(10, 6);
@@ -738,7 +907,8 @@ static void test_stride_is_what_the_snake_actually_travels(void) {
     CHECK_EQ(g.food_n, 1);                             /* still there */
     game_step(&g);
     CHECK_EQ(g.snake.cells[g.snake.head].x, 4);
-    CHECK_EQ(g.food_n, 0);
+    CHECK_EQ(g.food_n, 1);                             /* spent, then topped back up */
+    CHECK_EQ(g.food[0].placed, 0);
     square_cells = 0;
 
     /* and legality has to agree with the stride the snake travels: a direction
@@ -1496,7 +1666,9 @@ static void test_emit_frame(void) {
     world_reset(12, 8);
     Game g;
     blank_game(&g);
-    Point b[] = {{6, 4}, {5, 4}, {4, 4}, {3, 4}};                  /* head (6,4) */
+    /* set_body wants the literal TAIL FIRST, head last — written the other way
+     * round the rig runs backwards and the frame reports head (3,4). */
+    Point b[] = {{3, 4}, {4, 4}, {5, 4}, {6, 4}};                  /* head (6,4) */
     set_body(&g, b, 4);
     g.dir[0] = 1; g.dir[1] = 0;
     g.wrap = 1; g.hunt = 1; g.paused = 0; g.alive = 1; g.flash = 7;
@@ -1597,8 +1769,16 @@ static void test_save_data_discipline(void) {
         save_highscore(len);                       /* banks; must touch nothing */
     }
     CHECK(!file_exists(state_path));
-    CHECK(!file_exists(run_dir));                  /* no mkdir -p either */
-    CHECK(!file_exists(run_dir));
+    /* "Not even the folder" means the parent chain ensure_parent_dir would have
+     * built — the whole chain below state_path, leaf dir included. It cannot mean
+     * run_dir itself: main() mkdir's run_dir before the first suite runs and every
+     * scratch file in this binary lives inside it, so asking about run_dir only
+     * ever reports the harness, never the code under test. */
+    char nested[512];
+    snprintf(nested, sizeof nested, "%s/nested", run_dir);
+    CHECK(!file_exists(nested));                   /* no intermediate dir either */
+    snprintf(nested, sizeof nested, "%s/nested/deeper", run_dir);
+    CHECK(!file_exists(nested));                   /* nor the state file's own dir */
     CHECK_EQ(best_len, 40);                        /* ... but it IS banked in memory */
     CHECK_EQ(pending_best, 40);
 
@@ -1759,10 +1939,23 @@ static void test_input_queue(void) {
     CHECK_EQ(g.pending_count, 2);
     CHECK_EQ(g.pending[(g.pending_head + 1) % INPUT_QUEUE_SIZE][0], -1);
     CHECK_EQ(g.pending[(g.pending_head + 1) % INPUT_QUEUE_SIZE][1], 0);
-    /* and pressing the current direction again is not a no-op when the last
-     * queued move was something else */
+    /* Right now the queue holds (0,-1),(-1,0) and dir is still (1,0). Queueing
+     * (1,0) HERE would be a straight self-reversal — it is the exact reverse of
+     * the LAST QUEUED move, (-1,0), one tick behind it — and queue_direction
+     * drops it. That rejection is the rule, not a bug, so assert it first. */
     queue_direction(&g, 1, 0);
+    CHECK_EQ(g.pending_count, 2);                     /* reversal of the queued move */
+    /* Now the same current direction, with a different move behind it: (0,1) is
+     * neither a repeat nor a reversal of (-1,0), it goes in, and with (0,1) the
+     * last queued move, (1,0) is neither a repeat nor a reversal of THAT either.
+     * Pressing the direction the snake is already travelling is therefore not a
+     * no-op when the last queued move was something else. */
+    queue_direction(&g, 0, 1);
     CHECK_EQ(g.pending_count, 3);
+    queue_direction(&g, 1, 0);
+    CHECK_EQ(g.pending_count, 4);
+    CHECK_EQ(g.pending[(g.pending_head + 3) % INPUT_QUEUE_SIZE][0], 1);
+    CHECK_EQ(g.pending[(g.pending_head + 3) % INPUT_QUEUE_SIZE][1], 0);
 
     /* it drains FIFO, one command per tick, and the snake follows */
     world_reset(10, 6);
@@ -1831,6 +2024,9 @@ int main(void) {
            checks_failed == 1 ? "" : "s");
 
     for (int i = 0; i < scratch_n; i++) { unlink(scratch[i]); free(scratch[i]); }
-    rmdir(run_dir);
+    /* the guard is load-bearing: this wipes a tree, so it may only ever be
+       pointed at the directory main() itself made, never at anything a test
+       could have written into state_path */
+    if (!strncmp(run_dir, "/tmp/tsnake_unit_", 17)) wipe_dir(run_dir, 4);
     return checks_failed != 0;
 }
