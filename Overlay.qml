@@ -42,6 +42,36 @@ Item {
 
   readonly property string pluginId: "io.github.londelo.tsnake"
 
+  // -------------------------------------------------------------- glyph set
+  // The board's alphabet, in ONE place, keyed exactly the way the glyph lab's
+  // slots are keyed (GlyphLab.qml `roles`) so a `c`-copied set from the lab maps
+  // onto this table cell for cell.
+  //
+  // This is Brodie's pick out of the lab (2026-10-03), not a guess of mine. Every
+  // one of the seven is `c:0` in the lab's catalog — native to the board face
+  // (Adwaita Mono, what `monospace` resolves to), which is what makes them safe:
+  // a substituted glyph arrives with a different advance width and stops sitting in
+  // its cell. `AUTO HUNT` and `WRAP` stay as text labels (hudRight); the terminal
+  // build keeps its own `^ v < > o $` and is a different face of the game.
+  readonly property var glyphs: ({
+    headUp: "▲",      // U+25B2 BLACK UP-POINTING TRIANGLE
+    headDown: "▼",    // U+25BC BLACK DOWN-POINTING TRIANGLE
+    headLeft: "◀",    // U+25C0 BLACK LEFT-POINTING TRIANGLE
+    headRight: "▶",   // U+25B6 BLACK RIGHT-POINTING TRIANGLE
+    body: "◆",        // U+25C6 BLACK DIAMOND
+    food: "□",        // U+25A1 WHITE SQUARE
+    corpse: "◇"       // U+25C7 WHITE DIAMOND
+  })
+
+  // Glyph size as a multiple of the cell. Not cosmetic tuning — it is an ink
+  // correction. A monospace glyph's INK is roughly 0.7 em, not 1 em (the em box
+  // includes the advance and the leading), so drawing at `cell * 0.82` put the
+  // diamond at about 60% of the cell it was replacing: the old body was a solid
+  // `fillRect` edge to edge, and the bead-chain screenshot is what that mismatch
+  // looked like. Above 1.0 deliberately — a diamond's ink spans corner to corner
+  // of its em, so this is where it finally touches the cell it lives in.
+  readonly property var glyphScale: ({ body: 1.18, corpse: 1.18, food: 1.05, head: 1.0 })
+
   // ---------------------------------------------------------- state paths
   // The ENGINE owns every byte under the state dir; QML writes nothing there,
   // and nothing anywhere inside the plugin folder either. HOME + XDG state,
@@ -868,50 +898,74 @@ Item {
     // paused || !alive. Frames keep arriving; only painting stops.
     if (root.menuUp) return
 
-    var bodyFont = String(Math.floor(cell * 0.82)) + "px " + Style.font.menuFamily
-    ctx.font = bodyFont
     ctx.textAlign = "center"
     ctx.textBaseline = "middle"
 
-    // Food: the terminal draws '$' in green (pair 1).
-    ctx.fillStyle = "#41d158"
+    // Everything drawn from here on is a glyph out of `root.glyphs`, centred in its
+    // cell. The terminal paints '$' and 'o' as characters and the corpse/body as
+    // solid cells; the overlay now paints what the lab was built to choose.
+    // Each glyph sets its own size (see glyphScale), so there is no shared board
+    // font any more; the one below is only the fallback a blank slot's cell needs.
+    function fontFor(mult) {
+      return String(Math.max(6, Math.floor(cell * mult))) + "px " + Style.font.menuFamily
+    }
+
+    ctx.font = fontFor(1.0)
+
+    function put(ch, x, y, colour, alpha, mult) {
+      if (!ch) return
+      ctx.font = fontFor(mult)
+      ctx.globalAlpha = alpha === undefined ? 1.0 : alpha
+      ctx.fillStyle = colour
+      ctx.fillText(ch, root.cellLeft(x) + cell / 2, root.cellTop(y) + cell / 2)
+      ctx.globalAlpha = 1.0
+    }
+
+    // Food (pair 1 green). Was the terminal's '$'.
     var food = root.foodPts
     var i
     for (i = 0; i < food.length; i++) {
       if (!food[i]) continue
-      ctx.fillText("$", root.cellLeft(food[i].x) + cell / 2,
-                       root.cellTop(food[i].y) + cell / 2)
+      put(root.glyphs.food, food[i].x, food[i].y, "#41d158", undefined,
+          root.glyphScale.food)
     }
 
-    // Corpses: red, dimmed over their last third (snake.c:755 dims at
-    // ttl < WOUND_FADE / 3).
+    // Corpses (pair 3 red), dimmed over their last third (snake.c:755 dims at
+    // ttl < WOUND_FADE / 3). Was a solid cell; an outline diamond fades far more
+    // legibly than a shrinking block of red.
     var wounds = root.woundPts
     for (i = 0; i < wounds.length; i++) {
       if (!wounds[i]) continue
-      ctx.globalAlpha = (wounds[i].ttl < root.woundFade / 3) ? 0.4 : 1.0
-      ctx.fillStyle = "#e0524b"
-      ctx.fillRect(root.cellLeft(wounds[i].x), root.cellTop(wounds[i].y), cell, cell)
+      put(root.glyphs.corpse, wounds[i].x, wounds[i].y, "#e0524b",
+          (wounds[i].ttl < root.woundFade / 3) ? 0.4 : 1.0, root.glyphScale.corpse)
     }
-    ctx.globalAlpha = 1.0
 
-    // Snake: white body (pair 2); the head is the direction glyph, matching
-    // head_glyph() — dir[1]==-1 '^', dir[1]==1 'v', dir[0]==-1 '<', else '>'.
+    // Snake (pair 2 white). The head is the direction glyph — the same decision
+    // head_glyph() makes, by direction, not by index: dir[1]==-1 up, dir[1]==1
+    // down, dir[0]==-1 left, else right.
     var body = root.bodyPts
     for (i = 0; i < body.length; i++) {
       if (!body[i]) continue
-      ctx.fillStyle = "#f2f2f2"
+      var g
       if (i === 0) {
-        var g = ">"
-        if (root.dirY === -1) g = "^"
-        else if (root.dirY === 1) g = "v"
-        else if (root.dirX === -1) g = "<"
-        ctx.font = String(Math.floor(cell * 0.92)) + "px " + Style.font.menuFamily
-        ctx.fillText(g, root.cellLeft(body[i].x) + cell / 2,
-                        root.cellTop(body[i].y) + cell / 2)
-        ctx.font = bodyFont
+        g = root.glyphs.headRight
+        if (root.dirY === -1) g = root.glyphs.headUp
+        else if (root.dirY === 1) g = root.glyphs.headDown
+        else if (root.dirX === -1) g = root.glyphs.headLeft
       } else {
-        ctx.fillRect(root.cellLeft(body[i].x), root.cellTop(body[i].y), cell, cell)
+        g = root.glyphs.body
       }
+      // An empty slot means "draw the cell", not "draw nothing": a blank body or
+      // corpse glyph would otherwise paint an invisible snake and read as a bug in
+      // the engine. (No slot in today's set is empty; this is what makes the table
+      // safe to edit.)
+      if (!g) {
+        ctx.fillStyle = "#f2f2f2"
+        ctx.fillRect(root.cellLeft(body[i].x), root.cellTop(body[i].y), cell, cell)
+        continue
+      }
+      put(g, body[i].x, body[i].y, "#f2f2f2", undefined,
+          i === 0 ? root.glyphScale.head : root.glyphScale.body)
     }
 
     // The AUTO HUNT / WRAP labels are not painted here — see hudRight, which
