@@ -1,7 +1,6 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
-import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 
@@ -10,9 +9,14 @@ import qs.Ui
 //
 // Surface/lifecycle shape taken from /usr/share/omarchy/shell/plugins/emojis/
 // Emojis.qml: the host injects shell/manifest and drives open()/close()/
-// dismiss()/toggle(), and the surface is a fullscreen Overlay-layer
-// PanelWindow with EXCLUSIVE keyboard focus — without exclusive focus a game
-// is not playable, the shell keeps the keyboard.
+// dismiss()/toggle().
+//
+// The surface itself is shaped like the first-party dev gallery's
+// FloatingWindow (plugins/dev-gallery/GalleryPanel.qml:277): a real window
+// hyprland manages — movable, resizable, tileable, decorated — rather than the
+// unmanaged layer-shell slab it started as. Keyboard focus is ordinary window
+// focus now, not a layer-shell exclusive grab, so the shell keeps its keys and
+// the game gets them the way any other client does.
 Item {
   id: root
 
@@ -24,6 +28,11 @@ Item {
 
   // The host reads item.opened to decide summon-vs-hide (shell.qml:1205).
   property bool opened: false
+
+  // True only while WE are the ones hiding the window, so the window's
+  // onVisibleChanged doesn't call host hide() back at the host that is already
+  // hiding us (and, in dismiss()'s case, is about to tear this item down).
+  property bool closingFromHost: false
 
   readonly property string pluginId: "io.github.londelo.tsnake"
 
@@ -86,20 +95,40 @@ Item {
   // terminal build implements as CELL_TOP/CELL_LEFT, which draw() writes with
   // and handle_click() reads through.
   //
-  // Sizes come off the WINDOW, never off the card: cellSize → card size would
-  // be a binding loop the moment the card also feeds boardArea's size.
-  readonly property real hudHeight: Style.space(20)
-  readonly property real helpHeight: Style.space(20)
+  // Sizes come off the WINDOW, one way only: hyprland sizes the window, the
+  // window sizes the board. There is no inner card to size in between any more
+  // (see FloatingWindow), so cellSize never feeds anything back upward.
+  // Rows sized off their own font, the way plugins/emojis/Emojis.qml:36 sizes its
+  // header (`max(space(34), Style.font.title + controlPaddingY * 2)`). A flat
+  // space(20) row holding a bold title-size label clipped the descenders.
+  readonly property real hudHeight: Math.max(Style.space(28),
+    Style.font.title + Style.spacing.controlPaddingY * 2)
+  readonly property real helpHeight: Math.max(Style.space(22),
+    Style.font.body + Style.spacing.controlPaddingY * 2)
+  // Padding INSIDE the menu cards only (pause / game-over / engine-missing).
+  // They are the only boxes left in the window besides the board itself.
   readonly property real cardPadding: Style.space(24)
+  // The one gap in the whole surface: play field to WINDOW frame. Without an
+  // explicit inset the board's own border sits a hair off the window edge and
+  // reads as part of the chrome rather than as the play field. Brodie's "a
+  // little gap between the game and the frame".
+  readonly property real windowMargin: Style.space(30)
   readonly property real availW: panel.width > 0
-    ? Math.max(2, panel.width - cardPadding * 2) : 2
+    ? Math.max(2, panel.width - windowMargin * 2) : 2
   readonly property real availH: panel.height > 0
-    ? Math.max(2, panel.height - cardPadding * 2 - hudHeight - helpHeight
+    ? Math.max(2, panel.height - windowMargin * 2 - hudHeight - helpHeight
                  - Style.spacing.md * 2) : 2
 
-  // Square cells by construction: one cell size for both axes.
-  readonly property real cellSize: (root.bw > 0 && root.bh > 0)
-    ? Math.max(2, Math.floor(Math.min(root.availW / root.bw, root.availH / root.bh)))
+  // Square cells by construction: one cell size for both axes. FIT is only half
+  // of it — the other half is CAP. cellSize is derived by fitting whatever board
+  // the engine reports into the window, so an unsized board is stretched to fill
+  // the screen: at 10x6 that measured out at ~220 px a cell, a 35 px border, and
+  // a snake as wide as a third of the monitor. Capping at cellTarget means a
+  // board the overlay failed to size reads as a small centered card — which is
+  // the truth — instead of a mosaic nobody can play.
+  readonly property real cellSize: (root.bw > 0 && root.bh > 0 && panel.width > 1 && panel.height > 1)
+    ? Math.max(2, Math.min(root.cellTarget,
+        Math.floor(Math.min(root.availW / root.bw, root.availH / root.bh))))
     : 2
   readonly property real boardLeft: (boardArea.width - cellSize * root.bw) / 2
   readonly property real boardTop: (boardArea.height - cellSize * root.bh) / 2
@@ -109,25 +138,49 @@ Item {
   function colAt(px) { return Math.floor((px - root.boardLeft) / root.cellSize) }
   function rowAt(py) { return Math.floor((py - root.boardTop) / root.cellSize) }
 
-  // Target cell the board dimensions are planned against; the engine clamps
-  // to 10..400 x 6..250 and the frame's w/h stay the source of truth.
-  readonly property int targetCell: Math.max(10, Style.space(18))
+  // Target cell the board dimensions are planned against, and the ceiling on
+  // cellSize; the engine clamps the board to 10..400 x 6..250 and the frame's
+  // w/h stay the source of truth.
+  //
+  // Fitting the board to the WINDOW alone is what made it unreadable both ways:
+  // unsized it was 10x6 at ~220 px a cell, and once sized it became ~190x78 at
+  // 18 px — a black field with a speck on it. Cell size has to be chosen for the
+  // EYE first (a `$` and a `>` glyph are only legible above ~24 px), and the grid
+  // then capped to a playable count so a big monitor buys chunkier cells, not a
+  // bigger empty board.
+  readonly property int cellTarget: Math.max(10, Style.space(28))
+  readonly property int maxCols: 80
+  readonly property int maxRows: 40
 
   function desiredBoard() {
-    var w = Math.floor(root.availW / root.targetCell)
-    var h = Math.floor(root.availH / root.targetCell)
-    return { w: Math.max(10, Math.min(400, w)), h: Math.max(6, Math.min(250, h)) }
+    var w = Math.floor(root.availW / root.cellTarget)
+    var h = Math.floor(root.availH / root.cellTarget)
+    return { w: Math.max(10, Math.min(root.maxCols, w)),
+             h: Math.max(6, Math.min(root.maxRows, h)) }
   }
 
   property string sizeSent: ""
 
   function maybeSendSize() {
     if (!engineProc.running) return
+    // Refuse to ask while the window has no size yet. availW/availH fall back to
+    // 2 px, desiredBoard clamps that to the engine's 10x6 floor, and sizeSent
+    // then LATCHES the mistake — `onStarted` was the only caller, so the overlay
+    // played the whole run on a 10x6 board fit to the screen at ~220 px a cell.
+    // Sizing is now re-asked on every panel width/height change instead.
+    if (panel.width <= 1 || panel.height <= 1) return
     var d = root.desiredBoard()
     var key = d.w + "x" + d.h
     if (key === root.sizeSent) return
     root.sizeSent = key
     root.send({ cmd: "size", w: d.w, h: d.h })
+  }
+
+  // Menu cards are sized in ABSOLUTE terms, only capped by the board. A bare
+  // "0.6 * board width" reads fine on a small board and as a ~2000 px slab over
+  // a 3440 px one, which is most of what "looks messy" was.
+  function menuWidth(boardW) {
+    return Math.max(Style.space(260), Math.min(Style.space(560), boardW * 0.55))
   }
 
   // -------------------------------------------------------------- lifecycle
@@ -255,22 +308,34 @@ Item {
   }
 
   function open(payloadJson) {
+    root.closingFromHost = false
     root.opened = true
     root.sizeSent = ""
     root.startEngine()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    // Ask again after layout, from whichever of the two moments turns out to
+    // have a real window size — the engine's `onStarted` may well fire first.
+    Qt.callLater(function() { root.maybeSendSize() })
   }
 
   function close() {
+    root.closingFromHost = true
     root.opened = false
     root.stopEngine()
   }
 
   function dismiss() {
+    root.closingFromHost = true
     root.opened = false
+    // stopEngine BEFORE hide, not after it. With `keepLoaded: false` the host's
+    // hide() tears this whole item down, so the call that followed it landed on
+    // a dead object: "TypeError: Property 'stopEngine' ... is not a function",
+    // logged by Quickshell against this file. The run still got saved — the
+    // Process destructor closes the pipe and the engine banks on EOF — but the
+    // deliberate flush+quit never ran.
+    root.stopEngine()
     if (root.shell && typeof root.shell.hide === "function")
       root.shell.hide((root.manifest && root.manifest.id) || root.pluginId)
-    root.stopEngine()
   }
 
   function toggle() {
@@ -335,282 +400,315 @@ Item {
   Component.onDestruction: root.stopEngine()
 
   // ------------------------------------------------------------ the surface
-  PanelWindow {
+  // A real, hyprland-managed toplevel — NOT a layer-shell overlay. Layer-shell
+  // surfaces are unmanaged by definition: no decorations, no tiling, no
+  // user-resize, so the game could only ever be a fixed slab on top of the
+  // desktop. Quickshell 0.3.1 exposes `FloatingWindow` for this (an XDG toplevel
+  // hyprland will tile, float, move, decorate and resize), and the first-party
+  // dev-gallery plugin uses it from inside a plugin
+  // (plugins/dev-gallery/GalleryPanel.qml:277), which is also proof the host's
+  // Loader + summon path works for it.
+  //
+  // The board follows the window instead of the monitor: sizing is re-asked on
+  // every width/height change, so dragging a resize or un-floating the window
+  // hands back a bigger or smaller grid rather than a stretched one.
+  //
+  // One surface, ONE background: the window itself is the card. There used to be
+  // a `Rectangle { id: card }` inside it — themed fill, 1 px border, rounded
+  // corners — holding a board that drew its own border on its own floor, which
+  // read as a box inside a box inside a box (window chrome, card, board). Brodie's
+  // fix is the flat one: a window with a background, the board in it, and the
+  // instructions around the board. So the fill moved up here, and the board's own
+  // border + the two centred menu cards are the only edges left.
+  //
+  // Solid theme fill, not the old translucent scrim: hyprland now decorates and
+  // rounds this window, and a scrim over a managed window just washes out and
+  // lets whatever was tiled behind it show through the play field.
+  FloatingWindow {
     id: panel
     visible: root.opened
-    anchors { top: true; bottom: true; left: true; right: true }
-    color: "transparent"
-    WlrLayershell.namespace: "omarchy-tsnake"
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
-    exclusionMode: ExclusionMode.Ignore
+    title: "tsnake"
+    color: Color.menu.background.toString()
+    implicitWidth: Style.space(1280)
+    implicitHeight: Style.space(860)
+    // 10x6 is the engine's own floor (MIN_BOARD_W/H); 420x360 is what that needs
+    // at the target cell plus the HUD and help rows.
+    minimumSize: Qt.size(Style.space(420), Style.space(360))
 
-    Rectangle {
-      anchors.fill: parent
-      color: Color.menu.scrim
+    // The board is planned against THIS window, and the window is not guaranteed
+    // to have a size at the instant the engine starts — so sizing is a standing
+    // question asked whenever the size moves, not a one-shot on `onStarted`. Now
+    // also the resize hook: hyprland resizes it, the board re-fits.
+    onWidthChanged: root.maybeSendSize()
+    onHeightChanged: root.maybeSendSize()
+
+    // Hyprland can close this window from under us (window kill, a keybind, the
+    // decorations). The host has to hear about it, or its `openPanelIds` keeps an
+    // id for a window that is gone and the bar button then hides an already
+    // hidden panel — the same stale-id trap `q` avoids by calling dismiss()
+    // rather than close(). Mirrors GalleryPanel.qml:286-290, guard and all.
+    onVisibleChanged: {
+      if (!visible && !root.closingFromHost && root.shell
+          && typeof root.shell.hide === "function")
+        root.shell.hide((root.manifest && root.manifest.id) || root.pluginId)
     }
 
-    Rectangle {
-      id: card
+    Column {
+      id: boardColumn
       anchors.centerIn: parent
-      // Sized FROM the board, never the other way round.
-      width: boardArea.width + root.cardPadding
-      height: boardArea.height + root.cardPadding + root.hudHeight + root.helpHeight
-              + Style.spacing.md * 2
+      width: boardArea.width
+      spacing: Style.spacing.md
+
+      Item {
+        id: hud
+        width: parent.width
+        height: root.hudHeight
+
+        Text {
+          id: hudLeft
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: "LEN " + root.len + "   BEST " + root.best
+          color: Color.menu.text.toString()
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.title
+          font.bold: true
+        }
+
+        // Status labels: yellow ALL-CAPS, right-aligned, only while enabled —
+        // the terminal's help-row labels (COLOR_PAIR(4) + A_BOLD). They live
+        // here rather than on the Canvas because boardTop is exactly 0 when
+        // height is the limiting axis, so a label painted above the board
+        // floor gets clipped by the Canvas bounds and never shows.
+        Text {
+          id: hudRight
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          visible: root.huntOn === 1 || root.wrapOn === 1
+          textFormat: Text.PlainText
+          text: (root.huntOn === 1 ? "AUTO HUNT" : "")
+                + (root.huntOn === 1 && root.wrapOn === 1 ? "   " : "")
+                + (root.wrapOn === 1 ? "WRAP" : "")
+          color: "#e8c33f"
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.title
+          font.bold: true
+        }
+      }
+
+      Item {
+        id: boardArea
+        width: Math.max(2, root.cellSize * root.bw)
+        height: Math.max(2, root.cellSize * root.bh)
+
+        Canvas {
+          id: boardCanvas
+          anchors.fill: parent
+          onPaint: root.paintBoard(this)
+          onVisibleChanged: requestPaint()
+        }
+
+        Connections {
+          target: root
+          function onFrameSerialChanged() { boardCanvas.requestPaint() }
+          function onCellSizeChanged() { boardCanvas.requestPaint() }
+        }
+
+        // Press only, ever: the engine TOGGLES a cell, so a synthesised or
+        // double-fired click un-places what it just placed — hence no
+        // release handler and no debounce timer. focus stays off so a click
+        // cannot take active focus from keyCatcher.
+        MouseArea {
+          anchors.fill: parent
+          focus: false
+          acceptedButtons: Qt.LeftButton
+          cursorShape: Qt.PointingHandCursor
+          onPressed: function(mouse) {
+            // A menu up means the board is hiding its tokens; clicking then
+            // would edit a board the player cannot see.
+            if (!root.opened || root.menuUp || !engineProc.running) return
+            var col = root.colAt(mouse.x)
+            var row = root.rowAt(mouse.y)
+            if (col < 0 || row < 0 || col >= root.bw || row >= root.bh) return
+            root.send({ cmd: "click", x: col, y: row })
+            mouse.accepted = true
+          }
+        }
+      }
+
+      Text {
+        id: helpRow
+        width: parent.width
+        height: root.helpHeight
+        textFormat: Text.PlainText
+        text: "arrows move · h auto-hunt · x wrap · p pause · r restart · q quit"
+        color: Color.menu.text.toString()
+        opacity: 0.65
+        font.family: Style.font.menuFamily
+        font.pixelSize: Style.font.body      // a hint line, not a heading
+        horizontalAlignment: Text.AlignRight
+        elide: Text.ElideRight
+      }
+    }
+
+    // Menu overlays live OUTSIDE the column, so a panel never resizes the
+    // board underneath it and reflows no cells mid-death.
+    Rectangle {
+      id: pausePanel
+      visible: root.opened && root.alive === 1 && root.paused === 1
+      // centerIn: parent (the window), NOT boardArea. boardArea is a descendant
+      // of a sibling, so QML rejected that anchor outright — "Cannot anchor to an
+      // item that isn't a parent or sibling", logged twice against this file —
+      // and the card sat unanchored at the window's top-left corner. The column
+      // is centred on the window and the board is the middle of the column, so
+      // the window's centre is the board's centre to within half the difference
+      // between the HUD row and the help row (~5 px). Good enough to read as
+      // sitting over the board; anchoring to the board itself is what broke.
+      anchors.centerIn: parent
+      width: root.menuWidth(boardArea.width)
+      height: pauseColumn.implicitHeight + root.cardPadding
       radius: Style.cornerRadius
       color: Color.menu.background.toString()
       border.color: Color.menu.border.toString()
       border.width: 1
 
       Column {
-        id: boardColumn
+        id: pauseColumn
         anchors.centerIn: parent
-        width: boardArea.width
+        width: parent.width - Style.space(24)
         spacing: Style.spacing.md
 
-        Item {
-          id: hud
-          width: parent.width
-          height: root.hudHeight
-
-          Text {
-            id: hudLeft
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            textFormat: Text.PlainText
-            text: "LEN " + root.len + "   BEST " + root.best
-            color: Color.menu.text.toString()
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.title
-            font.bold: true
-          }
-
-          // Status labels: yellow ALL-CAPS, right-aligned, only while enabled —
-          // the terminal's help-row labels (COLOR_PAIR(4) + A_BOLD). They live
-          // here rather than on the Canvas because boardTop is exactly 0 when
-          // height is the limiting axis, so a label painted above the board
-          // floor gets clipped by the Canvas bounds and never shows.
-          Text {
-            id: hudRight
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            visible: root.huntOn === 1 || root.wrapOn === 1
-            textFormat: Text.PlainText
-            text: (root.huntOn === 1 ? "AUTO HUNT" : "")
-                  + (root.huntOn === 1 && root.wrapOn === 1 ? "   " : "")
-                  + (root.wrapOn === 1 ? "WRAP" : "")
-            color: "#e8c33f"
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.title
-            font.bold: true
-          }
-        }
-
-        Item {
-          id: boardArea
-          width: Math.max(2, root.cellSize * root.bw)
-          height: Math.max(2, root.cellSize * root.bh)
-
-          Canvas {
-            id: boardCanvas
-            anchors.fill: parent
-            onPaint: root.paintBoard(this)
-            onVisibleChanged: requestPaint()
-          }
-
-          Connections {
-            target: root
-            function onFrameSerialChanged() { boardCanvas.requestPaint() }
-            function onCellSizeChanged() { boardCanvas.requestPaint() }
-          }
-
-          // Press only, ever: the engine TOGGLES a cell, so a synthesised or
-          // double-fired click un-places what it just placed — hence no
-          // release handler and no debounce timer. focus stays off so a click
-          // cannot take active focus from keyCatcher.
-          MouseArea {
-            anchors.fill: parent
-            focus: false
-            acceptedButtons: Qt.LeftButton
-            cursorShape: Qt.PointingHandCursor
-            onPressed: function(mouse) {
-              // A menu up means the board is hiding its tokens; clicking then
-              // would edit a board the player cannot see.
-              if (!root.opened || root.menuUp || !engineProc.running) return
-              var col = root.colAt(mouse.x)
-              var row = root.rowAt(mouse.y)
-              if (col < 0 || row < 0 || col >= root.bw || row >= root.bh) return
-              root.send({ cmd: "click", x: col, y: row })
-              mouse.accepted = true
-            }
-          }
-        }
-
         Text {
-          id: helpRow
-          width: parent.width
-          height: root.helpHeight
           textFormat: Text.PlainText
-          text: "arrows move · h auto-hunt · x wrap · p pause · r restart · q quit"
+          text: "PAUSED"
+          color: Color.menu.selectedText.toString()
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.display
+          font.bold: true
+          horizontalAlignment: Text.AlignHCenter
+          width: parent.width
+        }
+        Text {
+          textFormat: Text.PlainText
+          text: "p resume · r restart · q quit"
           color: Color.menu.text.toString()
-          opacity: 0.65
           font.family: Style.font.menuFamily
           font.pixelSize: Style.font.title
-          horizontalAlignment: Text.AlignRight
-          elide: Text.ElideRight
+          horizontalAlignment: Text.AlignHCenter
+          width: parent.width
         }
       }
+    }
 
-      // Menu overlays live OUTSIDE the column, so a panel never resizes the
-      // board underneath it and reflows no cells mid-death.
-      Rectangle {
-        id: pausePanel
-        visible: root.opened && root.alive === 1 && root.paused === 1
-        anchors.centerIn: boardArea
-        width: Math.max(Style.space(200), boardArea.width * 0.6)
-        height: pauseColumn.implicitHeight + root.cardPadding
-        radius: Style.cornerRadius
-        color: Color.menu.background.toString()
-        border.color: Color.menu.border.toString()
-        border.width: 1
+    Rectangle {
+      id: overPanel
+      visible: root.opened && root.alive === 0
+      anchors.centerIn: parent        // see pausePanel: boardArea is not a valid anchor target
+      width: root.menuWidth(boardArea.width)
+      height: overColumn.implicitHeight + root.cardPadding
+      radius: Style.cornerRadius
+      color: Color.menu.background.toString()
+      border.color: Color.menu.border.toString()
+      border.width: 1
 
-        Column {
-          id: pauseColumn
-          anchors.centerIn: parent
-          width: parent.width - Style.space(24)
-          spacing: Style.spacing.md
-
-          Text {
-            textFormat: Text.PlainText
-            text: "PAUSED"
-            color: Color.menu.selectedText.toString()
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.display
-            font.bold: true
-            horizontalAlignment: Text.AlignHCenter
-            width: parent.width
-          }
-          Text {
-            textFormat: Text.PlainText
-            text: "p resume · r restart · q quit"
-            color: Color.menu.text.toString()
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.title
-            horizontalAlignment: Text.AlignHCenter
-            width: parent.width
-          }
-        }
-      }
-
-      Rectangle {
-        id: overPanel
-        visible: root.opened && root.alive === 0
-        anchors.centerIn: boardArea
-        width: Math.max(Style.space(200), boardArea.width * 0.6)
-        height: overColumn.implicitHeight + root.cardPadding
-        radius: Style.cornerRadius
-        color: Color.menu.background.toString()
-        border.color: Color.menu.border.toString()
-        border.width: 1
-
-        Column {
-          id: overColumn
-          anchors.centerIn: parent
-          width: parent.width - Style.space(24)
-          spacing: Style.spacing.md
-
-          Text {
-            textFormat: Text.PlainText
-            text: "GAME OVER"
-            color: Color.menu.selectedText.toString()
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.display
-            font.bold: true
-            horizontalAlignment: Text.AlignHCenter
-            width: parent.width
-          }
-          Text {
-            textFormat: Text.PlainText
-            text: "LEN " + root.len + " · BEST " + root.best
-            color: Color.menu.text.toString()
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.title
-            horizontalAlignment: Text.AlignHCenter
-            width: parent.width
-          }
-          Text {
-            textFormat: Text.PlainText
-            text: "r restart · q quit"
-            color: Color.menu.text.toString()
-            opacity: 0.8
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.title
-            horizontalAlignment: Text.AlignHCenter
-            width: parent.width
-          }
-        }
-      }
-
-      Rectangle {
-        id: failPanel
-        visible: root.opened && root.engineFailed
+      Column {
+        id: overColumn
         anchors.centerIn: parent
-        // Fixed width on purpose: reading failColumn.implicitWidth here while
-        // the column's own width reads back off this rectangle is a binding
-        // loop, and the wrapping Text below is exactly the child that closes
-        // it (implicit width of a wrapped label depends on the width given to
-        // it). Height is safe — it never feeds back into width.
-        width: Style.space(360)
-        height: failColumn.implicitHeight + root.cardPadding
-        radius: Style.cornerRadius
-        color: Color.menu.background.toString()
-        border.color: Color.menu.border.toString()
-        border.width: 1
+        width: parent.width - Style.space(24)
+        spacing: Style.spacing.md
 
-        Column {
-          id: failColumn
-          anchors.centerIn: parent
-          width: parent.width - root.cardPadding
-          spacing: Style.spacing.md
+        Text {
+          textFormat: Text.PlainText
+          text: "GAME OVER"
+          color: Color.menu.selectedText.toString()
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.display
+          font.bold: true
+          horizontalAlignment: Text.AlignHCenter
+          width: parent.width
+        }
+        Text {
+          textFormat: Text.PlainText
+          text: "LEN " + root.len + " · BEST " + root.best
+          color: Color.menu.text.toString()
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.title
+          horizontalAlignment: Text.AlignHCenter
+          width: parent.width
+        }
+        Text {
+          textFormat: Text.PlainText
+          text: "r restart · q quit"
+          color: Color.menu.text.toString()
+          opacity: 0.8
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.title
+          horizontalAlignment: Text.AlignHCenter
+          width: parent.width
+        }
+      }
+    }
 
-          Text {
-            textFormat: Text.PlainText
-            text: root.gotFrame ? "tsnake engine exited" : "tsnake engine not found"
-            color: Color.menu.selectedText.toString()
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.heading
-            font.bold: true
-          }
-          Text {
-            textFormat: Text.PlainText
-            wrapMode: Text.WordWrap
-            width: parent.width
-            visible: !root.gotFrame
-            text: "Build it first:  cd /home/londelo/CastleLondelo/projects/tsnake && make"
-                  + "\nTried: " + root.engineCandidates().join(", ")
-            color: Color.menu.text.toString()
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.title
-          }
-          Text {
-            textFormat: Text.PlainText
-            wrapMode: Text.WordWrap
-            width: parent.width
-            visible: root.engineStderr.length > 0
-            text: root.engineStderr.join("\n")
-            color: Color.menu.text.toString()
-            opacity: 0.7
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.body
-          }
-          Text {
-            textFormat: Text.PlainText
-            text: "q quit"
-            color: Color.menu.text.toString()
-            opacity: 0.8
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.title
-          }
+    Rectangle {
+      id: failPanel
+      visible: root.opened && root.engineFailed
+      anchors.centerIn: parent
+      // Fixed width on purpose: reading failColumn.implicitWidth here while
+      // the column's own width reads back off this rectangle is a binding
+      // loop, and the wrapping Text below is exactly the child that closes
+      // it (implicit width of a wrapped label depends on the width given to
+      // it). Height is safe — it never feeds back into width.
+      width: Style.space(360)
+      height: failColumn.implicitHeight + root.cardPadding
+      radius: Style.cornerRadius
+      color: Color.menu.background.toString()
+      border.color: Color.menu.border.toString()
+      border.width: 1
+
+      Column {
+        id: failColumn
+        anchors.centerIn: parent
+        width: parent.width - root.cardPadding
+        spacing: Style.spacing.md
+
+        Text {
+          textFormat: Text.PlainText
+          text: root.gotFrame ? "tsnake engine exited" : "tsnake engine not found"
+          color: Color.menu.selectedText.toString()
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.heading
+          font.bold: true
+        }
+        Text {
+          textFormat: Text.PlainText
+          wrapMode: Text.WordWrap
+          width: parent.width
+          visible: !root.gotFrame
+          text: "Build it first:  cd /home/londelo/CastleLondelo/projects/tsnake && make"
+                + "\nTried: " + root.engineCandidates().join(", ")
+          color: Color.menu.text.toString()
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.title
+        }
+        Text {
+          textFormat: Text.PlainText
+          wrapMode: Text.WordWrap
+          width: parent.width
+          visible: root.engineStderr.length > 0
+          text: root.engineStderr.join("\n")
+          color: Color.menu.text.toString()
+          opacity: 0.7
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.body
+        }
+        Text {
+          textFormat: Text.PlainText
+          text: "q quit"
+          color: Color.menu.text.toString()
+          opacity: 0.8
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.title
         }
       }
     }
@@ -720,7 +818,10 @@ Item {
     if (root.flash > 0) border = "#41d158"
     else if (root.huntOn === 1) border = "#ff7043"
     ctx.strokeStyle = border
-    ctx.lineWidth = Math.max(2, Math.round(cell * 0.16))
+    // Capped, not merely proportional. The 0.16 ratio is the one that reads like
+    // the terminal's solid border at an ordinary cell size; unbounded it was a
+    // 35 px green slab at the 220 px cells the unsized board produced.
+    ctx.lineWidth = Math.max(2, Math.min(3, Math.round(cell * 0.16)))
     var inset = ctx.lineWidth / 2
     ctx.strokeRect(left + inset, top + inset,
                    cell * bw - ctx.lineWidth, cell * bh - ctx.lineWidth)

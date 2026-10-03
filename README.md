@@ -94,13 +94,21 @@ on any close_write/create/delete/move:
 ```sh
 make
 mkdir -p ~/.config/omarchy/plugins
-cp -r . ~/.config/omarchy/plugins/tsnake
+cp -r . ~/.config/omarchy/plugins/io.github.londelo.tsnake
 omarchy-shell shell rescanPlugins
+install -Dm755 snake ~/.local/state/tsnake/snake   # see "Engine resolution"
 ```
 
-Then enable `io.github.londelo.tsnake` in Setup > Plugins, or add
-`{"id": "io.github.londelo.tsnake"}` to a `bar.layout` section. A `tsnake`
-button appears on the right of the bar; click it, or:
+The folder must be named after the manifest id, and it must be a real directory —
+`omarchy-plugin-validate` walks it and rejects links.
+
+Then put its button on the bar (Setup > Plugins does the same thing):
+
+```sh
+omarchy plugin enable io.github.londelo.tsnake --section right
+```
+
+A `tsnake` button appears on the right of the bar; click it, or:
 
 ```sh
 omarchy-shell shell toggle io.github.londelo.tsnake '{}'
@@ -110,6 +118,32 @@ Keys are the terminal's and nothing else: **arrows** steer, `h` auto-hunt, `p`
 pause, `x` wrap, `r` restart, `q` quit, `Escape` dismiss. No wasd, no
 uppercase, no `j/k/l`, no space, no Enter. Click a cell to place a `$`
 (click it again to remove it); clicking does not cancel auto-hunt — it aims it.
+
+### It is a window, not an overlay
+
+The surface is a Quickshell `FloatingWindow` — a real XDG toplevel Hyprland
+manages — so it takes decorations, focus and a resize drag, and the board
+re-fits itself to whatever size the window ends up at (`{"cmd":"size"}` is
+re-asked on every width/height change). There is exactly one background in it:
+the window's own. The board draws its own border and floor, the HUD row sits
+above and the key hints below, and the only other boxes are the pause / game-over
+cards. That is deliberate — a themed card inside the window around a bordered
+board read as a box inside a box inside a box.
+
+Hyprland *tiles* managed windows by default, which is not what a game wants. To
+get a centered, hand-sizable window, add this to `~/.config/hypr/looknfeel.lua`:
+
+```lua
+o.window({ title = "^tsnake$" }, { float = true })
+```
+
+Delete the line to go back to tiling it. Do not add `centerwindow` to that rule:
+it is a windowrule *keyword* but not a field `hl.window_rule` accepts, and it
+raises `hl.window_rule: unknown field 'centerwindow'` for the whole line (a red
+config-error banner). `float = true` alone is enough — the floated window landed
+at `[974,204]` for 1493×1003 on a 3440×1440/scale-1 monitor, i.e. centred to
+within a few pixels. (`hl.dsp.window.center` does exist in this Hyprland's Lua
+API, but calling it on the window moved it 0 px, so nothing dispatches it.)
 
 ### How it differs from the terminal
 
@@ -150,5 +184,8 @@ close, banks the run and exits on its own.
 /usr/lib/qt6/bin/qmllint -I /usr/share/omarchy/shell Overlay.qml BarWidget.qml
 ```
 
-The overlay has not been played through Quickshell yet — see the note in
-`.claude/CLAUDE.md` about acceptance being a human at the keyboard.
+The overlay has been driven under Quickshell since: summoned and hidden over
+IPC, steered with `wtype`, photographed with `grim`, and its geometry read back
+with `hyprctl clients`. That is a regression net, not a verdict — the acceptance
+gate for anything seen or felt is still a human at the keyboard with the mouse in
+hand (see `.claude/CLAUDE.md`).
