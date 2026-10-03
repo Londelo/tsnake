@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.londelo.tsnake",
+  "name": "tsnake",
+  "version": "0.1.0",
+  "description": "Terminal snake, playable as an Omarchy overlay.",
+  "keepLoaded": false,
+  "kinds": [
+    "overlay",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "overlay": "Overlay.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "defaultSection": "right"
+  }
+}

@@ -8,21 +8,44 @@ Owner key: `me` = Claude, `qml` = qml-plugin subagent, `ut` = unittests subagent
 
 | # | Task | Owner | Status |
 |---|---|---|---|
-| 1 | De-mirror the lifted test ban in `omarchy-plugin-plan.md` | me | [ ] |
-| 2 | Verify Omarchy/quickshell environment on this box | me | [ ] |
-| 3 | `snake --protocol`: NDJSON frame emit + command read, self-ticking | me | [ ] |
-| 4 | `snake --state <path>`: engine-owned file, hardened read, flush-only writes | me | [ ] |
-| 5 | `--square-cells`: 2-cell aspect stride becomes a renderer-side option | me | [ ] |
-| 6 | `make` warning-free under `-Wall -Wextra` (both targets) | me | [ ] |
-| 7 | Unit tests for the mechanics behind the ncurses seam | ut | [ ] |
-| 8 | `manifest.json` at repo root (`overlay` + `bar-widget`) | qml | [ ] |
-| 9 | `Overlay.qml`: PanelWindow/Overlay layer, exclusive focus, raw `Keys.onPressed`, board | qml | [ ] |
-| 10 | `BarWidget.qml`: bar button that toggles the overlay | qml | [ ] |
-| 11 | Engine lifecycle: start on `open()`, kill on `close()`/`dismiss()`/`onDestruction` | qml | [ ] |
-| 12 | Save data: read at `open()`, flush only after the overlay is closed | qml + me | [ ] |
-| 13 | Plugin install into `~/.config/omarchy/plugins/` + `omarchy plugin validate` + `qmllint` | me | [ ] |
-| 14 | Human play-test: does it feel like the terminal game | Brodie | [ ] |
-| 15 | README: install, removal, keybind line (local-facing only) | qml | [ ] |
+| 1 | De-mirror the lifted test ban in `omarchy-plugin-plan.md` | me | [x] |
+| 2 | Verify Omarchy/quickshell environment on this box | me | [x] Quickshell 0.3.1, refs present, plugins dir empty, no `qmllint` on PATH, **no `omarchy-shell` running** |
+| 3 | `snake --protocol`: NDJSON frame emit + command read, self-ticking | me | [x] |
+| 4 | `snake --state <path>`: engine-owned file, hardened read, flush-only writes | me | [x] verified by hand: nothing on disk while live, one write after close; symlink read+write refused with target intact; garbage file ignored; nested dirs created |
+| 5 | `--square-cells`: 2-cell aspect stride becomes a renderer-side option | me | [x] `stride_len_for()` is the single decider, shared by `game_step` and `hunt_stride_free` |
+| 6 | `make` warning-free under `-Wall -Wextra` (both targets) | me | [x] engine commit; re-check after the agents land |
+| 7 | Unit tests for the mechanics behind the ncurses seam | ut | [~] runs: 1814 checks / 22 failures; 9 suites triaging (`testfix` agent). 4 `-Wformat-truncation` warnings remain |
+| 8 | `manifest.json` at repo root (`overlay` + `bar-widget`) | qml | [x] passes the real `omarchy-plugin-validate` |
+| 9 | `Overlay.qml`: PanelWindow/Overlay layer, exclusive focus, raw `Keys.onPressed`, board | qml | [x] 780 lines; qmllint exit 0, no silencing comments, its warning categories reproduce on first-party `Emojis.qml` |
+| 10 | `BarWidget.qml`: bar button that toggles the overlay | qml | [x] 36 lines, shaped from `plugins/menu/BarWidget.qml:1-24` |
+| 11 | Engine lifecycle: start on `open()`, kill on `close()`/`dismiss()`/`onDestruction` | qml | [x] candidate list, `launchPending` + 1500 ms watchdog, 600 ms grace then SIGTERM backstop |
+| 12 | Save data: read at `open()`, flush only after the overlay is closed | qml + me | [x] `opened = false` precedes `stopEngine()` in both paths; flush→quit→kill. State at `$HOME/.local/state/tsnake/highscore`, engine binary outside the plugins dir — the inotify trap is designed out, not trusted |
+| 13 | Plugin install into `~/.config/omarchy/plugins/` + `omarchy plugin validate` + `qmllint` | me | [x] installed at `~/.config/omarchy/plugins/io.github.londelo.tsnake` + engine at `~/.local/state/tsnake/snake`; validator exit 0 on the installed folder; installed binary proven to stream frames and flush on quit |
+| 14 | Human play-test: does it feel like the terminal game | Brodie | [ ] **the only thing left.** Needs a login session with `omarchy-shell` up; never yet run under Quickshell |
+| 15 | README: install, removal, keybind line (local-facing only) | qml | [x] append-only: 84 insertions, 0 deletions |
+
+## Stage-1 landing notes (verified, not assumed)
+
+Three ways the brief was wrong about the 0.3.1 API, each caught against
+qmltypes/qmllint rather than guessed: `SplitParser` takes `splitMarker`, not
+`token`; `errorOccurred` is an overridable method with zero first-party users
+(dropped — a watchdog Timer + `onExited` share one `launchPending` flag instead);
+and `Qt.Key_h/p/x/r/q` **do not exist** on the QML `Qt` object, so those five
+keys would have silently never fired — they now match lowercase `event.text`,
+which also makes the lowercase-only rule real (`Shift+h` arrives as `H`).
+`q` calls `dismiss()`, not `close()`: `close()` stops the engine and hides the
+surface but leaves the host's `openPanelIds` holding the id, and the bar button
+toggles through `shell toggle` — a stale id makes the next press hide an already
+hidden panel and strands the Loader item.
+
+Unproven by any amount of automation, and not pretending to be: exclusive
+keyboard focus under hyprland, `Color.menu.*` on Canvas `fillStyle`,
+`Style.font.menuFamily` strings, and the feel of click-to-place.
+
+Found and fixed while building task 4: `ensure_parent_dir`'s component walk ran
+past the end of its own buffer, so the first save segfaulted under `--protocol`
+and returned garbage to its caller in the terminal build. Caught by hand-smoke,
+not by a rig.
 
 Deliberately deferred to stage 2: marketplace submission, Automated Security Baseline
 handling, `keepLoaded: true`, `preview.png`, category/tag choice.
