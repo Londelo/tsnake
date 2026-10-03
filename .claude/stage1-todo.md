@@ -169,3 +169,20 @@ skip the push, or to drop the oldest corpses to make room.
 
 Hygiene: `test_game` shows as untracked build output (`snake`/`test_hunt` are ignored);
 one `.gitignore` line closes that.
+
+## Stage 1e — the glyph lab: what characters can this app even use? (Brodie's ask, 2026-10-03)
+
+Asked: which characters are available for designing the overlay, a summonable picker to
+see them in, and reference sites. Answer delivered as `GlyphLab.qml` + prose + verified links.
+
+| # | Task | Owner | Status |
+|---|---|---|---|
+| 34 | Coverage truth: which candidates the board font actually has | me | [x] `/tmp/cov.sh` — `fc-match "Adwaita Mono:charset=XXXX"` over 227 candidates: **183 native, 44 substituted**. Emoji always borrow (Noto Color Emoji); `27F5-27F7` borrow from JetBrainsMono Nerd Font |
+| 35 | Icon truth: name the Nerd Font private-use glyphs from the font, not from memory | me | [x] 3714 PUA glyphs read out of `JetBrainsMonoNerdFont-Regular.ttf` by `/tmp/glyphnames.py` (hand-parsed `cmap` fmt4/12 + `post` 2.0). Guessed names for fire/tree/shield were **disproved** this way |
+| 36 | Catalog generated, not hand-typed | me | [x] `/tmp/gen_catalog.py` → 9 shelves; names from `unicodedata` (UCD **16.0.0**), which is also the assignment check — an unassigned codepoint is dropped, because `fc-match` calls those "native" (the old probe's `26EAD` was exactly that lie) |
+| 37 | `GlyphLab.qml`: shelves, font chips, click-to-assign, live preview, paste-ready set | me | [x] ~950 lines, loaded through a `Loader` so the game never pays for it; `{"mode":"glyphs"}` payload routes to it and **no engine starts** |
+| 38 | Shell-warning-free after restart | me | [x] `journalctl --user` grep for `GlyphLab\|Overlay.qml` → **0** hits. Four delegates needed `required property var modelData` before a Repeater hands it over |
+| 39 | Photo-driven fixes, each read off a screenshot | me | [x] title typo; head-glyph row clipped (the cell was height-capped, so the board bottom reached the canvas floor — the band is now budgeted *before* the cell is derived); font chips labelled in the font they name (Σταvδcard Σαμμβoλoς ΠΣ) → swatch in that face, label in `menuFamily`; empty field under the preview → board centred in its canvas; legend said "already in monospace" for a probe run against Adwaita Mono → `probeFont` |
+| 40 | Reference sites, reachable or unnamed | me | [x] verified by HTTP status, not by search snippet: `unicode.org/charts/` 200, `nerdfonts.com/cheat-sheet` 200, `nerd-fonts/wiki/Glyph-Sets` 200, `fileformat.info/.../char/search.htm` 200, `compart.com/en/unicode/U+25C6` 200. **Dead**: `unicode.org/chararts/chararts.html` 404, `graphemica.com` 403, `symbl.cc` 401 |
+| 41 | Hyprland float rule covers the lab window too | me | [ ] rule is written (`looknfeel.lua`: `^tsnake$` → `^tsnake`) but **needs a hyprland restart**: `hyprctl reload` does not re-run the Lua config, and neither `hyprctl keyword` ("can't work with non-legacy parsers") nor `hyprctl eval hl.window_rule` takes effect on already-mapped or newly-summoned windows. Until then the lab tiles at 1697x1382 |
+| 42 | Brodie picks the set, then the redesign pass | Brodie | [ ] summon it with `omarchy-shell shell summon io.github.londelo.tsnake '{"mode":"glyphs"}'`, click through, `c` to copy the block, paste it back |

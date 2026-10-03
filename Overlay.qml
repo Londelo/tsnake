@@ -29,6 +29,12 @@ Item {
   // The host reads item.opened to decide summon-vs-hide (shell.qml:1205).
   property bool opened: false
 
+  // Set from the summon payload (`{"mode":"glyphs"}`): the glyph lab comes up
+  // instead of the game, and NO engine starts. The lab is a design tool — a
+  // self-ticking AI snake behind the catalogue would be noise, and a second
+  // writer of the high-score file.
+  property bool labMode: false
+
   // True only while WE are the ones hiding the window, so the window's
   // onVisibleChanged doesn't call host hide() back at the host that is already
   // hiding us (and, in dismiss()'s case, is about to tear this item down).
@@ -311,6 +317,23 @@ Item {
     root.closingFromHost = false
     root.opened = true
     root.sizeSent = ""
+
+    // The payload is the host's, not the engine's: shell.qml:1152-1189 stashes
+    // whatever JSON `summon`/`toggle` was handed and delivers it to open(), so
+    // `omarchy-shell shell summon <id> '{"mode":"glyphs"}'` arrives here as-is.
+    // Anything unparseable is simply the plain game — a typo in a summon
+    // argument must not leave Brodie with no window at all.
+    root.labMode = false
+    if (payloadJson && payloadJson.length > 0) {
+      try {
+        var p = JSON.parse(payloadJson)
+        if (p && p.mode === "glyphs") root.labMode = true
+      } catch (e) {
+        root.labMode = false
+      }
+    }
+
+    if (root.labMode) return   // the lab owns the screen; no engine, no sizing
     root.startEngine()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     // Ask again after layout, from whichever of the two moments turns out to
@@ -321,12 +344,14 @@ Item {
   function close() {
     root.closingFromHost = true
     root.opened = false
+    root.labMode = false
     root.stopEngine()
   }
 
   function dismiss() {
     root.closingFromHost = true
     root.opened = false
+    root.labMode = false
     // stopEngine BEFORE hide, not after it. With `keepLoaded: false` the host's
     // hide() tears this whole item down, so the call that followed it landed on
     // a dead object: "TypeError: Property 'stopEngine' ... is not a function",
@@ -424,9 +449,20 @@ Item {
   // Solid theme fill, not the old translucent scrim: hyprland now decorates and
   // rounds this window, and a scrim over a managed window just washes out and
   // lets whatever was tiled behind it show through the play field.
+  // The glyph lab, as a SIBLING of the game window rather than a child: the
+  // Loader keeps this file out of the game's compile unit entirely, so a broken
+  // GlyphLab.qml takes the lab down and leaves the board playable. Nothing here
+  // starts until a summon carries {"mode":"glyphs"}.
+  Loader {
+    id: labLoader
+    active: root.opened && root.labMode
+    source: "GlyphLab.qml"
+    onLoaded: if (item) item.host = root
+  }
+
   FloatingWindow {
     id: panel
-    visible: root.opened
+    visible: root.opened && !root.labMode
     title: "tsnake"
     color: Color.menu.background.toString()
     implicitWidth: Style.space(1280)
@@ -724,7 +760,7 @@ Item {
       Keys.priority: Keys.BeforeItem
 
       Keys.onPressed: function(event) {
-        if (!root.opened) return
+        if (!root.opened || root.labMode) return
 
         // Ctrl/Alt/Meta never mean a game key: without this, Ctrl+R would
         // restart the run and Ctrl+H hunt, right through the browser habits.
@@ -776,7 +812,9 @@ Item {
     Connections {
       target: keyCatcher
       function onActiveFocusChanged() {
-        if (root.opened && !keyCatcher.activeFocus)
+        // !root.labMode, or the game's catcher fights the lab's catcher for
+        // focus on every change and the lab can never be typed at.
+        if (root.opened && !root.labMode && !keyCatcher.activeFocus)
           Qt.callLater(function() { keyCatcher.forceActiveFocus() })
       }
     }
