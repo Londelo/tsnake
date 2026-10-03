@@ -45,6 +45,12 @@ Item {
 
   property int pickSerial: 0
 
+  // How many times the preview has actually been painted. Not a decoration:
+  // 'the preview never refreshed' is unfalsifiable from the outside, and this makes
+  // it a number a single click can check. Kept on the root rather than on the Canvas
+  // so the canvas never has a binding that depends on its own paint.
+  property int paintCount: 0
+
   // --------------------------------------------------------------- fonts
   // All of these are `fc-list` output from this machine — not a list of fonts
   // that exist in the abstract. The first entry is deliberately the alias the
@@ -750,7 +756,12 @@ Item {
 
           Text {
             textFormat: Text.PlainText
-            text: "PREVIEW — the board, drawn with the set above"
+            // The counter is the diagnostic, not decoration: if it moves when the
+            // board does not, the bug is in paintPreview; if it does not move, the
+            // repaint was never requested. One click answers which, with no rig.
+            // Short: this row lives in the 430 px preview column, and the long
+            // phrasing ran the number off the window edge where nobody could read it.
+            text: "PREVIEW · repaints " + lab.paintCount
             color: Color.menu.text.toString()
             opacity: 0.7
             font.family: Style.font.menuFamily
@@ -761,6 +772,38 @@ Item {
             id: previewCanvas
             width: parent.width
             height: Style.space(210)
+
+            // Repaint is driven by PROPERTIES, not only by the imperative
+            // requestPaint() in bump(). A property change is what puts the item in
+            // the scene-graph's dirty list — the same shape the board canvas uses
+            // (Overlay.qml:550 repaints on `onFrameSerialChanged`, never on a bare
+            // call), and the reason the board updates ~18x a second while this one
+            // sat on its first frame.
+            //
+            // `pickRef` tracks the whole pick object rather than a counter: assign
+            // and clearSlot replace `pick` with a fresh object (never mutate it — a
+            // mutated plain object emits nothing), so object identity IS the change
+            // signal, and RESET cannot repaint-by-accident-forget-the-counter.
+            property var pickRef: lab.pick
+            property int opts: lab.fontIndex * 100 + lab.roleIndex * 10 + lab.groupIndex
+            onPickRefChanged: requestPaint()
+            onOptsChanged: requestPaint()
+            // An Item has `width` and `height`, not a consolidated `size` (the shell
+            // says so: `Cannot assign to non-existent property "onSizeChanged"`) —
+            // the preview is `width: parent.width`, so a window resize must repaint
+            // it or the board keeps cells sized for the old width.
+            onWidthChanged: requestPaint()
+            onHeightChanged: requestPaint()
+            // Same reason the board has it: a paint requested before the window is
+            // on screen is dropped, and the lab is created by a Loader seconds
+            // before anyone looks at it.
+            onVisibleChanged: requestPaint()
+
+            // The default pooled-image strategy reuses the previous frame's backing
+            // store; Immediate re-runs onPaint over a cleared canvas, so a stale
+            // frame is not even representable.
+            renderStrategy: Canvas.Immediate
+
             onPaint: lab.paintPreview(this)
           }
 
@@ -1003,5 +1046,7 @@ Item {
       if (!labels[i]) continue
       ctx.fillText(labels[i].ch, left + cell * (i * 0.75 + 0.4), y)
     }
+
+    lab.paintCount++
   }
 }
