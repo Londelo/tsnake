@@ -188,3 +188,35 @@ see them in, and reference sites. Answer delivered as `GlyphLab.qml` + prose + v
 | 42 | Brodie picks the set, then the redesign pass | me+Brodie | [x] his pasted block is now the single `glyphs` table in `Overlay.qml` (`▲▼◀▶` head, `◆` body, `□` food, `◇` corpse). `AUTO HUNT`/`WRAP` stay text labels — his words: "the wrap text is wrong though keep that unchanged". `[ ]` his eyes on it: the scale multipliers are unverified by photo (see 43) |
 | 43 | Ink correction for the glyph sizes | me | [x] `glyphScale` per role (body/corpse 1.18, food 1.05, head 1.0) — a mono glyph's ink is ~0.7 em, so the old shared `cell*0.82` drew the diamond at ~60% of the cell it replaced (the bead-chain screenshot). `[ ]` verified only as far as "compiles, paints, zero QML warnings" — see 44 for why no photo |
 | 44 | Summoned window maps unfocused, behind the other windows, and self-hides seconds later | me | [ ] reproducible: summon → window exists ~3-6 s → it is gone from `hyprctl clients` and the engine is stopped with it (no orphan: no `snake --protocol` process survives). Pin+float did not raise it above Brodie's terminals, so a photo of the board needs Brodie to click it or summon it himself. This is the same seam as row 29 (keyboard feel without the layer-shell grab) — likely the host hiding the panel on focus loss |
+
+## Stage 1f — the setup card: wrap, speed, and a START button (Brodie's ask, 2026-10-03)
+
+Asked: a small window at the beginning of the game — settings above, a Start button at the
+bottom; WRAP as a toggle; speed as a left-to-right slider whose middle is today's speed, that
+goes "a little bit lower" and "twice as fast"; pressing Start begins the run; **in-game wrap is
+locked**; `h`/`p`/`r`/`q` keep working in-game.
+
+| # | Task | Owner | Status |
+|---|---|---|---|
+| 45 | Engine: `started` flag — a run that has not begun cannot be stepped | me | [x] `Game.started`, `game_step` guards it the way it guards `paused`; `protocol_run` opens at 0, the terminal opens at 1 so the curses face is byte-identical |
+| 46 | Engine: player-picked tick — `tick_ms` on the Game, `TICK_MS` only the default | me | [x] `tick_delay_ms` returns `g->tick_ms`; speed stays CONSTANT within a run (never score-scaled) |
+| 47 | Engine: commands `start`, `speed {ms}`, `wrap {on}`, and the in-game lock | me | [x] `speed`/`wrap` are refused once started; `dir`/`hunt`/`pause` are refused before it; `start` = started 1 + paused 0 + queue cleared |
+| 48 | Engine: `restart` keeps the setup (wrap, speed, started) | me | [x] `game_init` memsets the Game, so preserving them is deliberate, not automatic |
+| 49 | Frame carries `started` and `speed` so the card paints from engine truth | me | [x] one source of truth: the card's toggle and slider read frames, they do not keep their own opinion |
+| 50 | Card: WRAP `ToggleSwitch` + SPEED `PanelSlider` + `Button { "START" }` | me | [x] shell's own `qs.Ui` controls, the idiom in `plugins/panels/tailscale/Panel.qml:480` and `plugins/panels/audio/Panel.qml:827` |
+| 51 | Slider range: 0.5×–2.0× of `TICK_MS`, default 1.0× | me | [x] ms = round(55 / mult) → 110 ms … 28 ms; clamp in the engine, not in the UI |
+| 52 | Overlay drops the in-game `x` wrap key (engine refuses it anyway) | me | [x] wrap is a setup choice now; the help row changes with `started`, so it never advertises a dead key |
+| 53 | Build warning-free, install the engine, docs, commit | me | [x] `make` under `-Wall -Wextra` printed only the three compile lines (snake, test_game, test_hunt) — zero diagnostics; engine reinstalled at `~/.local/state/tsnake/snake`, `Overlay.qml` into the plugin dir; `.claude/CLAUDE.md` keys + the new `started` bullet written. The Makefile bug it surfaced (both harnesses link two `main`s) is fixed, and `test_game` is gitignored |
+| 54 | Unit tests for the gates (not run unless Brodie says) | me | [x] `test_game.c` cases for speed clamp, wrap lock before/after start, `start` clearing pause, restart keeping the setup |
+| 55 | Brodie plays it | Brodie | [ ] the card is seen-or-not-seen territory: does the slider feel right, is 2× too fast |
+
+**Status 2026-10-03 (45–54 done, committed on `omarchy-plugin-stage1`).** What is proven: the
+engine compiles warning-free with the gates, and `test_game.c` compiles against them; the card
+loads with zero QML complaints in `journalctl --user` (a syntax error logs and draws no window).
+What is NOT proven: nobody has seen the card. `test_game` was built and deliberately not run
+(Brodie runs the tests). The card's look, the slider's feel, and whether START/arrows respond at
+all are rows 44 + 55 — 44 is now ON THE CRITICAL PATH, because the summoned window maps
+unfocused and self-hides in ~20-30 s, and a window without focus receives no keys.
+Two deliberate choices worth knowing before judging: START is mouse-only, and clicking food
+WORKS while the card is up (placing food aims the hunt AI, it is not steering) — if either is
+wrong, say so and it is a two-line change.
