@@ -14,7 +14,7 @@ Owner key: `me` = Claude, `qml` = qml-plugin subagent, `ut` = unittests subagent
 | 4 | `snake --state <path>`: engine-owned file, hardened read, flush-only writes | me | [x] verified by hand: nothing on disk while live, one write after close; symlink read+write refused with target intact; garbage file ignored; nested dirs created |
 | 5 | `--square-cells`: 2-cell aspect stride becomes a renderer-side option | me | [x] `stride_len_for()` is the single decider, shared by `game_step` and `hunt_stride_free` |
 | 6 | `make` warning-free under `-Wall -Wextra` (both targets) | me | [x] engine commit; re-check after the agents land |
-| 7 | Unit tests for the mechanics behind the ncurses seam | ut | [~] runs: 1814 checks / 22 failures; 9 suites triaging (`testfix` agent). 4 `-Wformat-truncation` warnings remain |
+| 7 | Unit tests for the mechanics behind the ncurses seam | ut | [x] **1853 checks, 0 failures**, 28/28 suites, exit 0, warning-free, repeat runs byte-identical. All 22 initial failures were rig bugs; `snake.c` was never touched. Independently mutation-tested by me: no `O_NOFOLLOW` → 2 failures, `ensure_food` neutered → 12, wrap disabled → 14 |
 | 8 | `manifest.json` at repo root (`overlay` + `bar-widget`) | qml | [x] passes the real `omarchy-plugin-validate` |
 | 9 | `Overlay.qml`: PanelWindow/Overlay layer, exclusive focus, raw `Keys.onPressed`, board | qml | [x] 780 lines; qmllint exit 0, no silencing comments, its warning categories reproduce on first-party `Emojis.qml` |
 | 10 | `BarWidget.qml`: bar button that toggles the overlay | qml | [x] 36 lines, shaped from `plugins/menu/BarWidget.qml:1-24` |
@@ -58,4 +58,20 @@ Invariant reminders the build must not break:
 - the board is never empty of tokens (`ensure_food`)
 - only walls kill; a self bite wounds
 - the engine is the only writer of the state file, and it writes only while the overlay
-  is closed (the plugins dir is inotify-watched: a write during play kills the game)
+  is closed. The state file now lives at `$HOME/.local/state/tsnake/highscore`, outside
+  the inotify-watched plugins dir, so a stray write can no longer trigger a reload by
+  itself — but a save during play would still reset the panel under the player
+
+## Known latent engine bug (found by the suite's read-through, NOT fixed — needs Brodie's call)
+
+`snake.c:340`, in `snake_bite`: `if (n > MAX_SNAKE - s->wound_len) n = ...;` then
+`if (n <= 0) return;`. That returns *before* `s->len = depth`, so once the corpse queue
+is saturated the bite severs nothing and `advance_one` pushes the head onto a live body
+cell anyway — the snake silently overlaps itself, with no severing and no death.
+Unreachable on any real board (it wants ~4096 un-faded corpses at once, and `WOUND_FADE`
+is 55 ticks), so it is latent; the reason it is worth writing down is that the failure
+mode is silent rather than loud. The fix is to treat "cannot sever" as "cannot bite" and
+skip the push, or to drop the oldest corpses to make room.
+
+Hygiene: `test_game` shows as untracked build output (`snake`/`test_hunt` are ignored);
+one `.gitignore` line closes that.
