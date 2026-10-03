@@ -68,3 +68,87 @@ While auto-hunt is armed the board border burns red-orange.
   two-cell horizontal stride. Greedy, not immortal — a long body can still
   trap it.
 - `make test` runs the headless hunt harness (`test_hunt.c`).
+
+## Omarchy overlay
+
+The same game as a fullscreen Quickshell overlay, next to the bar. `snake
+--protocol` is the engine — the real rules, no curses — and the overlay is its
+face. The terminal build and the overlay are one game: every command maps onto
+the terminal's own key handler, and the visual language matches (green `$`,
+white snake with a `^` `v` `<` `>` head, red corpses that fade, a green flash
+border, red-orange while auto-hunt is armed, yellow ALL-CAPS status labels).
+
+| File | Purpose |
+|---|---|
+| `manifest.json` | Plugin manifest — `schemaVersion` 1, kinds `overlay` + `bar-widget` |
+| `Overlay.qml` | The surface: PanelWindow, engine child, painter, menus, keys |
+| `BarWidget.qml` | The bar button that summons it |
+
+### Install
+
+This folder is the plugin folder — but **copy** it into `~/.config/omarchy/plugins/`,
+do not symlink. The shell refuses symlinks (`omarchy-plugin-validate` fails
+on any), and the shell inotify-watches that whole tree and reloads every plugin
+on any close_write/create/delete/move:
+
+```sh
+make
+mkdir -p ~/.config/omarchy/plugins
+cp -r . ~/.config/omarchy/plugins/tsnake
+omarchy-shell shell rescanPlugins
+```
+
+Then enable `io.github.londelo.tsnake` in Setup > Plugins, or add
+`{"id": "io.github.londelo.tsnake"}` to a `bar.layout` section. A `tsnake`
+button appears on the right of the bar; click it, or:
+
+```sh
+omarchy-shell shell toggle io.github.londelo.tsnake '{}'
+```
+
+Keys are the terminal's and nothing else: **arrows** steer, `h` auto-hunt, `p`
+pause, `x` wrap, `r` restart, `q` quit, `Escape` dismiss. No wasd, no
+uppercase, no `j/k/l`, no space, no Enter. Click a cell to place a `$`
+(click it again to remove it); clicking does not cancel auto-hunt — it aims it.
+
+### How it differs from the terminal
+
+- **The engine self-ticks.** It emits a full board snapshot every 55 ms plus
+  one after any input, so the overlay never drives the clock and QML stutter
+  never becomes game lag. Frames are complete snapshots, never diffed — one
+  dropped is one skipped paint.
+- **Menus are QML's**, not the engine's, and the board's contents hide under
+  them while frames keep being parsed.
+- **Cells are square** (`--square-cells`); the board size is negotiated with
+  `{"cmd":"size"}` and clamped by the engine to 10..400 × 6..250.
+- **The high score is the engine's file**, at `~/.local/state/tsnake/highscore`
+  (`--state`), never inside the plugin folder, and QML writes no file at all.
+  Under `--protocol` a save is *banked*, not written: the only write is
+  `{"cmd":"flush"}`, and the overlay sends it after the surface is down.
+
+### Engine resolution
+
+First hit wins: `$TSNAKE_BIN`, then `~/.local/state/tsnake/snake`, then the dev
+build in this repo. Never the plugin folder — building in there would trip the
+reload described above. If nothing starts, the overlay says so and tells you to
+run `make` instead of sitting on a blank screen.
+
+### Why the close order is fixed
+
+`hide → flush → quit → kill`, in that order, on `close()`, `dismiss()` and
+`Component.onDestruction`. Saving with the board visible would destroy the game
+under the player (the reload the save itself triggers), and saving on death
+would reset the game-over panel mid-display. Hidden means no process: an
+engine left running grinds BFS for the rest of the session, and every hot
+reload leaks another. If the overlay goes down hard, the engine sees stdin
+close, banks the run and exits on its own.
+
+### Checks
+
+```sh
+/usr/share/omarchy/bin/omarchy-plugin-validate .
+/usr/lib/qt6/bin/qmllint -I /usr/share/omarchy/shell Overlay.qml BarWidget.qml
+```
+
+The overlay has not been played through Quickshell yet — see the note in
+`.claude/CLAUDE.md` about acceptance being a human at the keyboard.
