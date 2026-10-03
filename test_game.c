@@ -169,6 +169,13 @@ static void blank_game(Game *g) {
     g->alive = 1;
     g->dir[0] = 1;
     g->dir[1] = 0;
+    /* A blank game is a run IN PROGRESS, which is what every test here means.
+       started == 0 is the setup card's state — the run has not been given away yet,
+       and game_step refuses to advance it — so the rig that stands for "playing"
+       must set it, exactly as game_init does. Only the setup-gate tests drop it back
+       to 0, and they do that on purpose. */
+    g->started = 1;
+    g->tick_ms = TICK_MS;
 }
 
 /* Lay the live body out exactly as given: tail first, head LAST (snake_push is
@@ -1520,13 +1527,28 @@ static void test_handle_command(void) {
     CHECK_EQ(handle_command(&g, "{\"cmd\":\"click\",\"x\":1}"), 1);     /* y missing */
     CHECK_EQ(food_index_at(&g, (Point) { 1, 0 }), -1);
 
-    /* toggles, mirroring p / x / h */
+    /* toggles, mirroring p / h (wrap moved off this block: it is a setup choice, see
+     * below — an in-game `wrap` command is now refused, and asserting it toggled here
+     * would be asserting the card's control back into the run) */
     world_reset(10, 6);
     game_init(&g);
     CHECK_EQ(handle_command(&g, "{\"cmd\":\"pause\"}"), 1); CHECK_EQ(g.paused, 1);
     CHECK_EQ(handle_command(&g, "{\"cmd\":\"pause\"}"), 1); CHECK_EQ(g.paused, 0);
+    /* wrap BEFORE the run begins: bare form toggles, `on` is absolute */
+    world_reset(10, 6);
+    game_init(&g);
+    g.started = 0;
     CHECK_EQ(handle_command(&g, "{\"cmd\":\"wrap\"}"), 1);  CHECK_EQ(g.wrap, 1);
     CHECK_EQ(handle_command(&g, "{\"cmd\":\"wrap\"}"), 1);  CHECK_EQ(g.wrap, 0);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"wrap\",\"on\":1}"), 1); CHECK_EQ(g.wrap, 1);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"wrap\",\"on\":1}"), 1); CHECK_EQ(g.wrap, 1);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"wrap\",\"on\":0}"), 1); CHECK_EQ(g.wrap, 0);
+    /* a nonsense `on` falls back to toggling rather than silently doing nothing */
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"wrap\",\"on\":7}"), 1); CHECK_EQ(g.wrap, 1);
+    /* and once started, wrap is locked — the engine, not the QML, is the guard */
+    g.started = 1;
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"wrap\"}"), 1);  CHECK_EQ(g.wrap, 1);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"wrap\",\"on\":0}"), 1); CHECK_EQ(g.wrap, 1);
     queue_direction(&g, 0, -1);
     CHECK_EQ(handle_command(&g, "{\"cmd\":\"hunt\"}"), 1);  CHECK_EQ(g.hunt, 1);
     CHECK_EQ(g.pending_count, 0);                          /* h drops the queue, like 'h' */
@@ -1672,6 +1694,9 @@ static void test_emit_frame(void) {
     set_body(&g, b, 4);
     g.dir[0] = 1; g.dir[1] = 0;
     g.wrap = 1; g.hunt = 1; g.paused = 0; g.alive = 1; g.flash = 7;
+    /* a run the player tuned: 33 ms and begun. Both must reach the card, or the
+     * slider thumb and the START button are painting from numbers that do not exist */
+    g.tick_ms = 33; g.started = 1;
     best_len = 23;
     Point f[3] = { { 1, 1 }, { 10, 6 }, { 2, 5 } };
     int fp[3] = { 0, 1, 0 };
@@ -1700,6 +1725,8 @@ static void test_emit_frame(void) {
     CHECK_EQ(json_int(frame, "paused", &v), 1); CHECK_EQ(v, g.paused);
     CHECK_EQ(json_int(frame, "wrap", &v), 1);  CHECK_EQ(v, g.wrap);
     CHECK_EQ(json_int(frame, "hunt", &v), 1);  CHECK_EQ(v, g.hunt);
+    CHECK_EQ(json_int(frame, "started", &v), 1); CHECK_EQ(v, 1);
+    CHECK_EQ(json_int(frame, "speed", &v), 1);  CHECK_EQ(v, 33);
     CHECK_EQ(json_int(frame, "flash", &v), 1); CHECK_EQ(v, 7);
     CHECK_EQ(json_int(frame, "best", &v), 1);  CHECK_EQ(v, 23);
     char ev[16];
@@ -1985,6 +2012,119 @@ static void test_input_queue(void) {
     CHECK_EQ(g.pending_count, 0);
 }
 
+/* ------------------------------------------------------------------ *
+ * 16. the run begins when the card says so
+ * ------------------------------------------------------------------ */
+
+/* The setup card is a GATE, and a gate is only real if the engine holds it shut:
+ * before START the snake cannot be stepped, steered, paused, hunted, or re-tuned,
+ * and after START wrap and speed are frozen. Both halves are asserted through the
+ * same handle_command / game_step pair the overlay drives down a pipe — the card in
+ * QML is decoration until this is true. */
+static void test_the_run_begins_when_told(void) {
+    Game g;
+
+    /* game_init hands over a run that is READY to play: the curses face never sees
+     * started == 0, only --protocol puts it back on the card */
+    world_reset(10, 6);
+    game_init(&g);
+    CHECK_EQ(g.started, 1);
+    CHECK_EQ(g.tick_ms, TICK_MS);
+    CHECK_EQ(tick_delay_ms(&g), TICK_MS);
+
+    /* an unstarted run does not move — five ticks and the head has not stirred */
+    world_reset(10, 6);
+    blank_game(&g);
+    Point row[] = { { 2, 2 }, { 1, 2 }, { 0, 2 } };
+    set_body(&g, row, 3);
+    g.started = 0;
+    g.dir[0] = 1; g.dir[1] = 0;
+    tokens_far(&g);
+    Point still = g.snake.cells[g.snake.head];
+    for (int i = 0; i < 5; i++) game_step(&g);
+    CHECK_EQ(g.snake.cells[g.snake.head].x, still.x);
+    CHECK_EQ(g.snake.cells[g.snake.head].y, still.y);
+    CHECK_EQ(g.snake.len, 3);
+    CHECK_EQ(g.alive, 1);
+
+    /* the commands that steer a run are refused while it has not begun: the ENGINE
+     * refuses them, so a QML bug — or a hand-written line on the pipe — cannot get
+     * the snake moving early */
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"dir\",\"dx\":0,\"dy\":1}"), 1);
+    CHECK_EQ(g.pending_count, 0);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"hunt\"}"), 1);
+    CHECK_EQ(g.hunt, 0);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"pause\"}"), 1);
+    CHECK_EQ(g.paused, 0);
+
+    /* the setup itself IS editable here, and clamped at both ends: 0 ms would be a
+     * busy-spinning loop, 100000 ms would read as a frozen game */
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"speed\",\"ms\":0}"), 1);
+    CHECK_EQ(g.tick_ms, MIN_TICK_MS);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"speed\",\"ms\":100000}"), 1);
+    CHECK_EQ(g.tick_ms, MAX_TICK_MS);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"speed\",\"ms\":40}"), 1);
+    CHECK_EQ(g.tick_ms, 40);
+    CHECK_EQ(tick_delay_ms(&g), 40);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"speed\"}"), 1);          /* no ms at all */
+    CHECK_EQ(g.tick_ms, 40);
+
+    /* clicks ARE allowed before START: placing a token aims the AI, it does not steer */
+    int n0 = g.food_n;
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"click\",\"x\":9,\"y\":5}"), 1);
+    CHECK_EQ(g.food_n, n0 + 1);
+
+    /* START means go — never "go, but paused" — and it arrives with a clean queue, so
+     * a direction leaned before the run began cannot launch it sideways */
+    queue_direction(&g, 0, -1);
+    g.paused = 1;
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"start\"}"), 1);
+    CHECK_EQ(g.started, 1);
+    CHECK_EQ(g.paused, 0);
+    CHECK_EQ(g.pending_count, 0);
+
+    /* and now the same step that did nothing moves the snake */
+    world_reset(10, 6);
+    blank_game(&g);
+    set_body(&g, row, 3);
+    g.started = 0;
+    g.dir[0] = 1; g.dir[1] = 0;
+    tokens_far(&g);
+    still = g.snake.cells[g.snake.head];
+    handle_command(&g, "{\"cmd\":\"start\"}");
+    game_step(&g);
+    CHECK(g.snake.cells[g.snake.head].x != still.x);
+
+    /* in-game the speed and the walls are DECIDED: the card's controls are gone for a
+     * reason, and this is what makes "you cannot change wrap or speed mid-run" true
+     * even of a client that keeps sending the commands */
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"speed\",\"ms\":100}"), 1);
+    CHECK_EQ(g.tick_ms, TICK_MS);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"wrap\",\"on\":1}"), 1);
+    CHECK_EQ(g.wrap, 0);
+
+    /* restart replays under the SAME setup the player chose */
+    protocol_mode = 1;                                   /* banks, never writes */
+    g.tick_ms = 30;
+    g.wrap = 1;
+    static Point long_body[20];
+    for (int i = 0; i < 20; i++) { long_body[i].x = i % 10; long_body[i].y = (i / 10); }
+    set_body(&g, long_body, 20);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"restart\"}"), 1);
+    CHECK_EQ(g.snake.len, 3);                            /* a fresh run */
+    CHECK_EQ(g.tick_ms, 30);
+    CHECK_EQ(g.wrap, 1);
+    CHECK_EQ(g.started, 1);
+    /* ...and a restart while STILL on the card stays on the card: `r` is not START */
+    g.started = 0;
+    g.tick_ms = 45;
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"restart\"}"), 1);
+    CHECK_EQ(g.started, 0);
+    CHECK_EQ(g.tick_ms, 45);
+    CHECK_EQ(g.wrap, 1);
+    protocol_mode = 0;
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void) {
@@ -2019,6 +2159,7 @@ int main(void) {
     run_suite("emit_frame", test_emit_frame);
     run_suite("save-data discipline", test_save_data_discipline);
     run_suite("the input queue", test_input_queue);
+    run_suite("the run begins when the card says so", test_the_run_begins_when_told);
 
     printf("\n%ld checks, %ld failure%s\n", checks_run, checks_failed,
            checks_failed == 1 ? "" : "s");
