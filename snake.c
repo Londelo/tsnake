@@ -909,8 +909,9 @@ static void relocate_snake(Game *g, int want_len) {
 }
 
 /* after a resize the board may have shrunk under the game. State is never
-   reset here: hunt, wrap, pause and the snake's LENGTH survive — if the
-   snake no longer fits it is relocated, not restarted. */
+   reset here: hunt, wrap, pause, the setup gate, the dialed speed and the
+   snake's LENGTH survive — if the snake no longer fits it is relocated, not
+   restarted. Relocating is a move, restarting is not the same thing. */
 static void sanitize_after_resize(Game *g) {
     int oob = 0;
     for (int i = 0; i < g->snake.len; i++) {
@@ -925,6 +926,14 @@ static void sanitize_after_resize(Game *g) {
         int keep_len = g->snake.len;
         int keep_wrap = g->wrap, keep_hunt = g->hunt;
         int keep_paused = g->paused, keep_alive = g->alive;
+        /* game_init resets started/tick_ms, and a resize is NOT a new run.
+           Without these two the overlay cancelled its own setup card: the very
+           first frame it gets it sends {"cmd":"size"}, the snake did not fit
+           that new board, game_init set started = 1 — which silently pressed
+           START for the player — and the run raced off at TICK_MS and died at
+           the wall before a hand ever touched the card. Same reason the `size`
+           command itself must not reset the speed the player just dialed. */
+        int keep_started = g->started, keep_ms = g->tick_ms;
         Food keep_food[MAX_FOOD];
         int keep_n = g->food_n;
         memcpy(keep_food, g->food, sizeof(keep_food[0]) * (size_t)keep_n);
@@ -934,6 +943,8 @@ static void sanitize_after_resize(Game *g) {
         g->hunt = keep_hunt;
         g->paused = keep_paused;
         g->alive = keep_alive;
+        g->started = keep_started;
+        g->tick_ms = keep_ms;
         /* game_init rolled a fresh set of its own; the player's board wins,
            because resize must never reset game state — including food they
            placed by hand. */
