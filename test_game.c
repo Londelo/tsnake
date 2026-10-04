@@ -1222,6 +1222,8 @@ static void test_shrink_preserves_state(void) {
     CHECK_EQ(g.paused, 1);
     CHECK_EQ(g.wrap, 1);
     CHECK_EQ(g.hunt, 1);
+    CHECK_EQ(g.started, 1);                           /* blank_game's run is still a run */
+    CHECK_EQ(g.tick_ms, TICK_MS);                     /* and still at the speed it was dialled */
     CHECK_EQ(g.snake.len, n);                        /* length survived: relocated */
     for (int i = 0; i < g.snake.len; i++) {
         int idx = (g.snake.head - i + MAX_SNAKE * 2) % MAX_SNAKE;
@@ -1394,6 +1396,55 @@ static void test_grow_disturbs_nothing(void) {
     CHECK_EQ(g.alive, 1); CHECK_EQ(g.flash, 4);
     CHECK_EQ(g.dir[0], 1); CHECK_EQ(g.dir[1], 0);
     CHECK_EQ(g.pending_count, 2);                   /* queued turns are not thrown away */
+}
+
+/* The bug this pins cost the setup card entirely. The overlay's FIRST act is to
+ * report the size it was given — {"cmd":"size"} — and when the snake did not fit
+ * that board, sanitize_after_resize reached for game_init, which sets started = 1.
+ * So the card's own size report pressed START for the player: the run launched at
+ * the default tick rather than the dialled one and ran into a wall before a hand
+ * ever touched the card, and all the QML could do was paint GAME OVER.
+ * A resize is a MOVE, not a new run: the gate stays shut and the speed stays dialled. */
+static void test_resize_cannot_press_start(void) {
+    world_reset(30, 16);
+    Game g;
+    blank_game(&g);
+    g.started = 0;                                  /* on the card, as --protocol leaves it */
+    g.tick_ms = 100;                                /* the player dialled slow */
+
+    /* a body long enough that it cannot fit the board the overlay is about to ask for */
+    static Point body[40];
+    int n = 0;
+    for (int i = 0; i < 14; i++) { body[n].x = i; body[n].y = 0; n++; }
+    for (int i = 1; i < 13; i++) { body[n].x = 0; body[n].y = i; n++; }
+    set_body(&g, body, n);
+    g.dir[0] = 1; g.dir[1] = 0;
+    tokens_far(&g);
+
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"size\",\"w\":10,\"h\":6}"), 1);
+    CHECK_EQ(BOARD_W, 10);
+    CHECK_EQ(BOARD_H, 6);
+    CHECK_EQ(g.started, 0);                         /* the card was never cancelled */
+    CHECK_EQ(g.tick_ms, 100);                       /* slow is still slow */
+    CHECK_EQ(g.alive, 1);
+    CHECK_EQ(g.snake.len, n);                       /* relocated, not restarted */
+    for (int i = 0; i < g.snake.len; i++) {
+        int idx = (g.snake.head - i + MAX_SNAKE * 2) % MAX_SNAKE;
+        CHECK(in_bounds(g.snake.cells[idx]));
+    }
+
+    /* and the gate still holds after the relocation — the snake stays put on the card */
+    Point still = g.snake.cells[g.snake.head];
+    for (int i = 0; i < 5; i++) game_step(&g);
+    CHECK_EQ(g.snake.cells[g.snake.head].x, still.x);
+    CHECK_EQ(g.snake.cells[g.snake.head].y, still.y);
+    CHECK_EQ(g.alive, 1);
+
+    /* START still starts it, at the speed the player dialled and not TICK_MS */
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"start\"}"), 1);
+    CHECK_EQ(g.started, 1);
+    CHECK_EQ(g.tick_ms, 100);
+    CHECK_EQ(tick_delay_ms(&g), 100);
 }
 
 /* ------------------------------------------------------------------ *
@@ -2154,6 +2205,7 @@ int main(void) {
     run_suite("a shrink caps length, never empties", test_shrink_caps_and_never_leaves_empty);
     run_suite("a shrink drops a stranded corpse", test_shrink_drops_stranded_corpse);
     run_suite("growing disturbs nothing", test_grow_disturbs_nothing);
+    run_suite("a resize cannot press START", test_resize_cannot_press_start);
     run_suite("the JSON codec", test_json_codec);
     run_suite("handle_command", test_handle_command);
     run_suite("emit_frame", test_emit_frame);
