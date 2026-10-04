@@ -213,6 +213,8 @@ locked**; `h`/`p`/`r`/`q` keep working in-game.
 **Status 2026-10-03 (45–54 done, committed on `omarchy-plugin-stage1`).** What is proven: the
 engine compiles warning-free with the gates, and `test_game.c` compiles against them; the card
 loads with zero QML complaints in `journalctl --user` (a syntax error logs and draws no window).
+*(That journal claim is retracted 2026-10-04 — this Quickshell forwards no plugin `console.log`, so
+it was silence, not evidence.)*
 What is NOT proven: nobody has seen the card. `test_game` was built and deliberately not run
 (Brodie runs the tests). The card's look, the slider's feel, and whether START/arrows respond at
 all are rows 44 + 55 — 44 is now ON THE CRITICAL PATH, because the summoned window maps
@@ -220,3 +222,21 @@ unfocused and self-hides in ~20-30 s, and a window without focus receives no key
 Two deliberate choices worth knowing before judging: START is mouse-only, and clicking food
 WORKS while the card is up (placing food aims the hunt AI, it is not steering) — if either is
 wrong, say so and it is a two-line change.
+| 56 | Fix: `sanitize_after_resize` pressed START (the card never appeared) | me | [x] it saved hunt/wrap/paused/alive/length but not `started`/`tick_ms`; `game_init` sets both, and the overlay's first act is `{"cmd":"size"}` — proof: that exact line turned `started":0` into `started":1` then `alive":0` on the installed engine; now both survive. Verified by screenshot: the card renders |
+| 57 | Unit test pinning "a resize cannot press START" | me | [ ] built warning-free, NOT RUN (Brodie runs tests) — `run_suite("a resize cannot press START", …)` |
+
+**Status 2026-10-04 (the missing card, fixed).** The card was never a QML problem: the engine was
+pressing START on the card's behalf. `sanitize_after_resize`'s out-of-bounds branch called
+`game_init`, which sets `started = 1` and `tick_ms = TICK_MS`, and the overlay sends
+`{"cmd":"size"}` as its first act — so the run launched at the default speed the instant the card
+was drawn and died at a wall. Reproduced against the installed binary (that command, and only
+that command, flipped `started":0` → `started":1` → `alive":0`), fixed by carrying `started` and
+`tick_ms` across the init the way `restart` already does, re-verified the same way, and confirmed
+by screenshot (`SET UP YOUR RUN`, WRAP, SPEED 1.00× 55 ms, START).
+Two things said out loud: (1) **retracted** — the earlier "zero QML complaints in
+`journalctl --user`" evidence is worthless, this Quickshell never forwards JS `console.log` to the
+journal, so absence of complaints proved nothing; (2) the accidental auto-started runs during
+debugging advanced `~/.local/state/tsnake/highscore` from 3 to 4, and `omarchy-restart-shell` was
+run once. A trap for whoever debugs the overlay next: a hidden panel kills its `Process`, so a
+stale window keeps painting the *previous* engine's last frame while `ps` shows a live-looking
+process — hide first, confirm the engine died, then summon.
