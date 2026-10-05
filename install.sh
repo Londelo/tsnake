@@ -58,8 +58,18 @@ make -C "$SRC" snake >/dev/null
 
 # The entry-point name is the cache key. Hash the bytes so identical content
 # keeps the same URL (no needless reload) and any edit gets a brand-new one.
-STAMP="$(sha256sum "$SRC/Overlay.qml" | cut -c1-12)"
-ENTRY="Overlay-$STAMP.qml"
+#
+# The separator is an underscore, NOT a dash, and that is load-bearing: Qt derives
+# a component's type name from the file's base name, and `-` is not legal in a QML
+# identifier. `Overlay-6099905284bf.qml` was measured failing with
+# `WARN scene: … File name case mismatch` and then `QQmlVMEMetaObject: Internal
+# error - attempted to evaluate a function in an invalid context`, which the host
+# reports through its own broken error path (`WARN scene: @shell.qml[1357:-1]:
+# ReferenceError: errorString is not defined`) so no window ever appeared and the
+# bar button looked dead. Not one .qml under /usr/share/omarchy/shell has a dash
+# in its name — a QML file name has to be an identifier.
+STAMP="$(printf '%s' "$(sha256sum "$SRC/Overlay.qml" | cut -c1-12)" | tr -dc '[:alnum:]')"
+ENTRY="Overlay_${STAMP}.qml"
 
 # The record and the card's settings are the user's, not the build's: carry them
 # across the swap so neither a reinstall nor a --fresh can cost anyone a high score.
@@ -79,13 +89,22 @@ if (( FRESH )); then
   if [[ -d $DEST ]]; then omarchy-plugin-remove "$ID" --yes >/dev/null; fi
 fi
 
+# Every write in here is a `close_write` the shell watches (PluginRegistry.qml:663)
+# and each one asks for a full plugin reload, so a file whose bytes already match
+# is left strictly alone — an unchanged install should barely touch the folder.
+copy_if_changed() {
+  local src="$1" dest="$2" mode="$3"
+  if [[ -f $dest ]] && cmp -s "$src" "$dest"; then return 0; fi
+  install -m "$mode" "$src" "$dest"
+}
+
 mkdir -p "$DEST"
 chmod 0755 "$DEST"
-install -m 0755 "$SRC/snake" "$DEST/snake"
-install -m 0644 "$SRC/Overlay.qml" "$DEST/$ENTRY"
-install -m 0644 "$SRC/BarWidget.qml" "$DEST/BarWidget.qml"
-install -m 0644 "$SRC/GlyphLab.qml" "$DEST/GlyphLab.qml"
-install -m 0644 "$SRC/README.md" "$DEST/README.md"
+copy_if_changed "$SRC/snake" "$DEST/snake" 0755
+copy_if_changed "$SRC/Overlay.qml" "$DEST/$ENTRY" 0644
+copy_if_changed "$SRC/BarWidget.qml" "$DEST/BarWidget.qml" 0644
+copy_if_changed "$SRC/GlyphLab.qml" "$DEST/GlyphLab.qml" 0644
+copy_if_changed "$SRC/README.md" "$DEST/README.md" 0644
 
 # The manifest points at this content's URL. Built here, never committed: a plain
 # checkout still carries "Overlay.qml" as its entry point.
@@ -93,8 +112,10 @@ jq --arg entry "$ENTRY" '.entryPoints.overlay = $entry' "$SRC/manifest.json" >"$
 mv -f "$DEST/manifest.json.tmp" "$DEST/manifest.json"
 chmod 0644 "$DEST/manifest.json"
 
-# Old entries would otherwise pile up in the watched folder forever.
-find "$DEST" -maxdepth 1 -name 'Overlay-*.qml' ! -name "$ENTRY" -delete
+# Old entries would otherwise pile up in the watched folder forever — including
+# any dashed one left by the version of this script that thought `-` was legal.
+find "$DEST" -maxdepth 1 \( -name 'Overlay_*.qml' -o -name 'Overlay-*.qml' \) \
+  ! -name "$ENTRY" -delete
 
 for f in highscore setup; do
   if [[ -n $SAVED && -f $SAVED/$f ]]; then
