@@ -1822,19 +1822,21 @@ static void test_emit_frame(void) {
  * 13d. save-data discipline
  * ------------------------------------------------------------------ */
 
-/* Under --protocol the engine is the ONLY writer of the best-length file, and
- * save_highscore must not be the path to it: the shell watches the whole plugin
- * directory for write/create/delete and reloads plugins on any event inside one,
- * which would destroy and recreate the game-over panel under the player's eyes.
- * flush_state() is the single permitted write. The terminal build, by contrast,
- * does write on every save — so both halves are asserted here, because a suite
- * that only checks "no write" passes just as happily if writes are broken
- * everywhere. */
+/* Under --protocol the engine is the ONLY writer of the best-length file, and it
+ * writes the moment the record is BEATEN. That is the rule that replaced "bank it in
+ * RAM and let flush_state() write it when the panel closes", and the reason is the bug
+ * Brodie reported: an engine the shell never told to stop — SIGKILL, a shell crash, an
+ * orphan left by a plugin reload — died holding a record that existed nowhere else, and
+ * the next summon read the old file. The old fear (a write during play reloads the
+ * overlay) died with the plugin-folder path: the watcher is `inotifywait -r` over
+ * ~/.config/omarchy/plugins ONLY (services/PluginRegistry.qml:663), and the state file
+ * lives under ~/.local/state. flush_state() still exists, and still has a job. */
 static void test_save_data_discipline(void) {
     Game g;
     char content[64];
 
-    /* protocol mode: many saves, nothing on disk at all — not even the folder */
+    /* protocol mode: forty grows, and the record is on disk while the game is LIVE —
+     * this is the assertion that failed before the fix, and it is the whole bug */
     world_reset(10, 6);
     protocol_mode = 1;
     snprintf(state_path, sizeof state_path, "%s/nested/deeper/highscore", run_dir);
@@ -1844,23 +1846,29 @@ static void test_save_data_discipline(void) {
     for (int i = 0; i < 40; i++) { b[i].x = i % BOARD_W; b[i].y = i / BOARD_W; }
     for (int len = 1; len <= 40; len++) {
         set_body(&g, b, len);
-        save_highscore(len);                       /* banks; must touch nothing */
+        save_highscore(len);                       /* beats the record: goes to disk */
     }
-    CHECK(!file_exists(state_path));
-    /* "Not even the folder" means the parent chain ensure_parent_dir would have
-     * built — the whole chain below state_path, leaf dir included. It cannot mean
-     * run_dir itself: main() mkdir's run_dir before the first suite runs and every
-     * scratch file in this binary lives inside it, so asking about run_dir only
-     * ever reports the harness, never the code under test. */
+    CHECK(file_exists(state_path));
+    CHECK(read_file(state_path, content, sizeof content));
+    CHECK_STR(content, "40\n");
+    /* ensure_parent_dir built the whole chain — the point of naming a folder a fresh
+     * checkout does not have yet. (It cannot mean run_dir itself: main() mkdir's that
+     * before the first suite runs, so asking about it reports the harness, not the code.) */
     char nested[512];
     snprintf(nested, sizeof nested, "%s/nested", run_dir);
-    CHECK(!file_exists(nested));                   /* no intermediate dir either */
+    CHECK(file_exists(nested));
     snprintf(nested, sizeof nested, "%s/nested/deeper", run_dir);
-    CHECK(!file_exists(nested));                   /* nor the state file's own dir */
-    CHECK_EQ(best_len, 40);                        /* ... but it IS banked in memory */
+    CHECK(file_exists(nested));
+    CHECK_EQ(best_len, 40);                        /* and it is in memory too, for frames */
     CHECK_EQ(pending_best, 40);
 
-    /* flush_state is what creates it, with the best length ever */
+    /* one write per new record, not one per tick: the saves that DO NOT beat the record
+     * must not touch the file at all, or every 55 ms would be an open()/write() */
+    for (int i = 0; i < 200; i++) save_highscore(40);       /* equal is not better */
+    CHECK(read_file(state_path, content, sizeof content));
+    CHECK_STR(content, "40\n");
+
+    /* flush_state still clears the bank, and still has the last word */
     flush_state();
     CHECK(file_exists(state_path));
     CHECK(read_file(state_path, content, sizeof content));
@@ -1960,6 +1968,124 @@ static void test_save_data_discipline(void) {
     CHECK(file_exists(state_path));
     CHECK(read_file(state_path, content, sizeof content));
     CHECK_STR(content, "9\n");
+}
+
+/* ------------------------------------------------------------------ *
+ * 13e. the setup card persists
+ * ------------------------------------------------------------------ */
+
+/* WRAP and SPEED are two integers in a file beside the high score, written the moment
+ * the player changes one and read back before the first frame — so a re-summon shows
+ * the card as they left it, with no storage in QML and no second opinion anywhere. The
+ * cases that matter are the ones where the file is wrong: a settings file must never be
+ * able to hand the game a busy-spinning tick, a frozen one, or a target for a planted
+ * symlink. */
+static void test_setup_persists(void) {
+    char content[64];
+    int wrap = 9, ms = 9;
+
+    /* round trip, in a directory that does not exist yet (a fresh checkout), and the
+     * format is exactly two integers plus a newline */
+    world_reset(20, 12);
+    setup_path[0] = 0;
+    snprintf(setup_path, sizeof setup_path, "%s/made/by/save/setup", run_dir);
+    save_setup(1, 30);
+    CHECK(file_exists(setup_path));
+    CHECK(read_file(setup_path, content, sizeof content));
+    CHECK_STR(content, "1 30\n");
+    load_setup(&wrap, &ms);
+    CHECK_EQ(wrap, 1);
+    CHECK_EQ(ms, 30);
+
+    /* absent: not an error, and the caller's garbage in-outs are replaced by the card's
+     * real defaults rather than trusted */
+    unlink(setup_path);
+    load_setup(&wrap, &ms);
+    CHECK_EQ(wrap, 0);
+    CHECK_EQ(ms, TICK_MS);
+
+    /* each guard stands on its own: a legal wrap with an absurd tick keeps the wrap and
+     * refuses the tick, and vice versa */
+    char *bad = scratch_path("setup_bad");
+    FILE *f = fopen(bad, "w");
+    if (f) { fprintf(f, "1 400000\n"); fclose(f); }
+    snprintf(setup_path, sizeof setup_path, "%s", bad);
+    load_setup(&wrap, &ms);
+    CHECK_EQ(wrap, 1);
+    CHECK_EQ(ms, TICK_MS);                          /* frozen tick refused */
+    f = fopen(bad, "w");
+    if (f) { fprintf(f, "7 25\n"); fclose(f); }
+    load_setup(&wrap, &ms);
+    CHECK_EQ(wrap, 0);                              /* nonsense wrap refused */
+    CHECK_EQ(ms, 25);
+    /* too fast is as unbuildable as too slow: MIN_TICK_MS is a guard, not a suggestion */
+    f = fopen(bad, "w");
+    if (f) { fprintf(f, "1 1\n"); fclose(f); }
+    load_setup(&wrap, &ms);
+    CHECK_EQ(ms, TICK_MS);
+    /* junk, empty, and a planted 400-byte file all read as defaults */
+    f = fopen(bad, "w");
+    if (f) { fprintf(f, "not a setup\n"); fclose(f); }
+    load_setup(&wrap, &ms);
+    CHECK_EQ(wrap, 0); CHECK_EQ(ms, TICK_MS);
+    f = fopen(bad, "w");
+    if (f) { fclose(f); }
+    load_setup(&wrap, &ms);
+    CHECK_EQ(wrap, 0); CHECK_EQ(ms, TICK_MS);
+    f = fopen(bad, "w");
+    if (f) { for (int i = 0; i < 40; i++) fprintf(f, "1111111111"); fclose(f); }
+    load_setup(&wrap, &ms);
+    CHECK_EQ(ms, TICK_MS);                          /* 400 bytes is not a setup */
+
+    /* symlink: lstat refuses it, the target is untouched, and the link stays a link */
+    char *victim = scratch_path("setup_victim");
+    FILE *vf = fopen(victim, "w");
+    if (vf) { fprintf(vf, "keep me\n"); fclose(vf); }
+    char *link = scratch_path("setup_link");
+    unlink(link);
+    CHECK_EQ(symlink(victim, link), 0);
+    snprintf(setup_path, sizeof setup_path, "%s", link);
+    load_setup(&wrap, &ms);
+    CHECK_EQ(wrap, 0); CHECK_EQ(ms, TICK_MS);
+    save_setup(1, 40);                              /* O_NOFOLLOW: must not go through */
+    CHECK(read_file(victim, content, sizeof content));
+    CHECK_STR(content, "keep me\n");
+    struct stat st;
+    CHECK_EQ(lstat(link, &st), 0);
+    CHECK(S_ISLNK(st.st_mode));
+
+    /* the commands write it — with the value the ENGINE settled on, not the one the
+     * client asked for, so a poisoned pipe cannot write tomorrow's card */
+    Game g;
+    world_reset(20, 12);
+    blank_game(&g);
+    g.started = 0;
+    snprintf(setup_path, sizeof setup_path, "%s/setup_cmds", run_dir);
+    unlink(setup_path);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"wrap\",\"on\":1}"), 1);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"speed\",\"ms\":99999}"), 1);
+    CHECK(read_file(setup_path, content, sizeof content));
+    CHECK_STR(content, "1 200\n");                  /* 200 == MAX_TICK_MS, the clamp */
+    load_setup(&wrap, &ms);
+    CHECK_EQ(wrap, 1);
+    CHECK_EQ(ms, MAX_TICK_MS);
+
+    /* after START both are refused, and a refused edit must NOT rewrite the file with
+     * the setting the player did not get — that would be a card that lies next time */
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"start\"}"), 1);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"wrap\",\"on\":0}"), 1);
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"speed\",\"ms\":20}"), 1);
+    CHECK_EQ(g.wrap, 1);
+    CHECK_EQ(g.tick_ms, MAX_TICK_MS);
+    CHECK(read_file(setup_path, content, sizeof content));
+    CHECK_STR(content, "1 200\n");
+
+    /* and a game_init cannot wipe them: restart keeps the setup, so the file the card
+     * was built from still matches the run being replayed */
+    CHECK_EQ(handle_command(&g, "{\"cmd\":\"restart\"}"), 1);
+    CHECK_EQ(g.wrap, 1);
+    CHECK_EQ(g.tick_ms, MAX_TICK_MS);
+    setup_path[0] = 0;
 }
 
 /* ------------------------------------------------------------------ *
@@ -2210,6 +2336,7 @@ int main(void) {
     run_suite("handle_command", test_handle_command);
     run_suite("emit_frame", test_emit_frame);
     run_suite("save-data discipline", test_save_data_discipline);
+    run_suite("the setup card persists", test_setup_persists);
     run_suite("the input queue", test_input_queue);
     run_suite("the run begins when the card says so", test_the_run_begins_when_told);
 
