@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define main snake_unused_main
@@ -147,19 +148,30 @@ static void wipe_dir(const char *path, int depth) {
  * protocol_mode, state_path and the two banked-best ints — that a previous
  * test could have left in any state at all, so every test resets them and
  * nothing inherits anything.
- * state_path always points inside our scratch dir: no test may ever be able to
- * touch the real $HOME/.tsnake_highscore, not even by accident. */
+ * state_path and setup_path always point inside our scratch dir: no test may ever be
+ * able to touch the real $HOME/.tsnake_highscore or $HOME/.tsnake_setup, not even by
+ * accident. */
 static void world_reset(int w, int h) {
     srand(20261002u);          /* one fixed seed: a passing run is reproducible */
     BOARD_W = w;
     BOARD_H = h;
     square_cells = 0;
-    protocol_mode = 0;
+    protocol_mode = 0; save_on_beat = 1;
     best_len = 0;
     pending_best = 0;
     memset(state_path, 0, sizeof state_path);
     snprintf(state_path, sizeof state_path, "%s/highscore", run_dir);
     unlink(state_path);
+    /* Same for the card's file: a banked setup left over from a previous test would be
+       written by this one's flush and read as a pass. It gets a scratch name rather than
+       just being cleared, because an EMPTY setup_path is not "no file" — setup_file_path()
+       falls back to $HOME/.tsnake_setup, so any flush that fired without a test naming
+       the file would write into the real home directory. */
+    memset(setup_path, 0, sizeof setup_path);
+    snprintf(setup_path, sizeof setup_path, "%s/setup", run_dir);
+    unlink(setup_path);
+    pending_setup_ms = -1;
+    pending_setup_wrap = 0;
 }
 
 /* A game with no randomness in it at all: food and body are placed by hand, so
@@ -1615,18 +1627,19 @@ static void test_handle_command(void) {
     /* restart wipes the board AND banks the run before doing it */
     world_reset(10, 6);
     game_init(&g);
-    protocol_mode = 1;                                     /* banks, never writes */
+    protocol_mode = 1; save_on_beat = 0;                                     /* banks, never writes */
     static Point long_body[30];
     for (int i = 0; i < 30; i++) { long_body[i].x = i % BOARD_W; long_body[i].y = (i / BOARD_W); }
     set_body(&g, long_body, 30);
     CHECK_EQ(handle_command(&g, "{\"cmd\":\"restart\"}"), 1);
-    CHECK_EQ(best_len, 30);                                /* the run is banked */
-    CHECK_EQ(pending_best, 30);
+    CHECK_EQ(pending_best, 30);           /* the run went to the bank, and survives the reset */
+    CHECK_EQ(best_len, 0);                /* the frame's number is the SAVED record, and this
+                                             run never saved one */
     CHECK_EQ(g.snake.len, 3);                              /* a fresh game */
     CHECK_EQ(g.food_n, FOOD_COUNT);
     CHECK_EQ(g.alive, 1);
     CHECK_EQ(g.pending_count, 0);
-    protocol_mode = 0;
+    protocol_mode = 0; save_on_beat = 1;
 
     /* size: clamped at both ends, and it sanitizes rather than resets */
     world_reset(10, 6);
@@ -1677,14 +1690,20 @@ static void test_handle_command(void) {
     /* quit stops the engine and banks, flush writes nothing of its own accord */
     world_reset(10, 6);
     game_init(&g);
-    protocol_mode = 1;
+    protocol_mode = 1; save_on_beat = 0;
     static Point q[12];
     for (int i = 0; i < 12; i++) { q[i].x = i; q[i].y = 0; }
     set_body(&g, q, 12);
     CHECK_EQ(handle_command(&g, "{\"cmd\":\"quit\"}"), 0);
-    CHECK_EQ(best_len, 12);
+    /* quit is one of the endings that MUST land the bank: this run began with no file at
+     * all, so a "12\n" sitting there now can only have come from quit's own flush. */
+    char quit_content[32];
+    CHECK(read_file(state_path, quit_content, sizeof quit_content));
+    CHECK_STR(quit_content, "12\n");
+    CHECK_EQ(best_len, 0);        /* frames report the SAVED record as of the last load —
+                                     the run's 12 belongs to the bank, never to the frame */
     CHECK_EQ(pending_best, 0);                                   /* flush_state consumed it */
-    protocol_mode = 0;
+    protocol_mode = 0; save_on_beat = 1;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1822,23 +1841,28 @@ static void test_emit_frame(void) {
  * 13d. save-data discipline
  * ------------------------------------------------------------------ */
 
-/* Under --protocol the engine is the ONLY writer of the best-length file, and it
- * writes the moment the record is BEATEN. That is the rule that replaced "bank it in
- * RAM and let flush_state() write it when the panel closes", and the reason is the bug
- * Brodie reported: an engine the shell never told to stop — SIGKILL, a shell crash, an
- * orphan left by a plugin reload — died holding a record that existed nowhere else, and
- * the next summon read the old file. The old fear (a write during play reloads the
- * overlay) died with the plugin-folder path: the watcher is `inotifywait -r` over
- * ~/.config/omarchy/plugins ONLY (services/PluginRegistry.qml:663), and the state file
- * lives under ~/.local/state. flush_state() still exists, and still has a job. */
+/* Under --protocol the engine is the ONLY writer of the best-length file, and it writes
+ * at the END of a run, not while it plays. That is the second reversal: the overlay's
+ * files live INSIDE the plugin folder, so that `omarchy plugin remove` erases the whole
+ * footprint, and the shell watches that folder — `inotifywait -m -r -q -e
+ * close_write,create,delete,move` over ~/.config/omarchy/plugins (services/
+ * PluginRegistry.qml:663), and any change to a NON-hidden path reloads the plugins
+ * (PluginRegistry.qml:735 → shell.qml:1476). A write mid-play would pull the window out
+ * from under the player. So save_on_beat is the switch: the curses face keeps it and
+ * writes the instant the record is beaten; protocol_run clears it and the record is
+ * BANKED — best_len rises at once (the frames must tell the truth) and the byte lands on
+ * flush (quit / SIGTERM / EOF). What the ban must still guarantee is the part Brodie
+ * reported losing: every ending the engine can see coming lands the bank, and an ending
+ * it cannot (SIGKILL) is the deliberate, documented price of living in the watched folder. */
 static void test_save_data_discipline(void) {
     Game g;
     char content[64];
 
-    /* protocol mode: forty grows, and the record is on disk while the game is LIVE —
-     * this is the assertion that failed before the fix, and it is the whole bug */
+    /* protocol mode: forty grows, and NOT ONE BYTE is on disk while the game is live.
+     * This is the pair to the old bug: the record must survive, but it may not be written
+     * during play, so the proof is "absent now, present after the flush". */
     world_reset(10, 6);
-    protocol_mode = 1;
+    protocol_mode = 1; save_on_beat = 0;
     snprintf(state_path, sizeof state_path, "%s/nested/deeper/highscore", run_dir);
     CHECK(!file_exists(state_path));
     blank_game(&g);
@@ -1846,56 +1870,117 @@ static void test_save_data_discipline(void) {
     for (int i = 0; i < 40; i++) { b[i].x = i % BOARD_W; b[i].y = i / BOARD_W; }
     for (int len = 1; len <= 40; len++) {
         set_body(&g, b, len);
-        save_highscore(len);                       /* beats the record: goes to disk */
+        save_highscore(len);                       /* beats the record: banked only */
     }
+    CHECK(!file_exists(state_path));               /* live: nothing written, by design */
+    CHECK_EQ(best_len, 0);        /* what a frame would report is the record AS IT STANDS ON
+                                     DISK, and this run began with no file at all — so the
+                                     card may print LEN 40 beside LAST HIGH SCORE 0 and be
+                                     telling the truth about both. The HUD wording depends
+                                     on this and nothing else checks it. */
+    CHECK_EQ(pending_best, 40);                    /* the run's own number, waiting */
+    char nested[512];
+    snprintf(nested, sizeof nested, "%s/nested", run_dir);
+    CHECK(!file_exists(nested));                   /* not even the dirs it will need */
+
+    /* the end of a run: one burst, and it carries the whole parent chain with it —
+     * the point of naming a folder a fresh checkout does not have yet. (It cannot mean
+     * run_dir itself: main() mkdir's that before the first suite runs, so asking about
+     * it reports the harness, not the code.) */
+    flush_state();
     CHECK(file_exists(state_path));
     CHECK(read_file(state_path, content, sizeof content));
     CHECK_STR(content, "40\n");
-    /* ensure_parent_dir built the whole chain — the point of naming a folder a fresh
-     * checkout does not have yet. (It cannot mean run_dir itself: main() mkdir's that
-     * before the first suite runs, so asking about it reports the harness, not the code.) */
-    char nested[512];
     snprintf(nested, sizeof nested, "%s/nested", run_dir);
     CHECK(file_exists(nested));
     snprintf(nested, sizeof nested, "%s/nested/deeper", run_dir);
     CHECK(file_exists(nested));
-    CHECK_EQ(best_len, 40);                        /* and it is in memory too, for frames */
-    CHECK_EQ(pending_best, 40);
+    CHECK_EQ(pending_best, 0);                     /* the bank is spent, not held */
 
-    /* one write per new record, not one per tick: the saves that DO NOT beat the record
-     * must not touch the file at all, or every 55 ms would be an open()/write() */
-    for (int i = 0; i < 200; i++) save_highscore(40);       /* equal is not better */
-    CHECK(read_file(state_path, content, sizeof content));
-    CHECK_STR(content, "40\n");
+    /* an empty bank writes nothing at all — the only check that tells a genuine no-write
+     * from a same-bytes rewrite: take the file away, flush, and it must stay away. A flush
+     * that re-wrote what was already there would hand the watched folder a create plus a
+     * close_write for no reason, and the panel reloads. */
+    unlink(state_path);
+    flush_state();
+    CHECK(!file_exists(state_path));
 
-    /* flush_state still clears the bank, and still has the last word */
+    /* the same rule at the volume a real run produces: two hundred ticks at a length that
+     * beats nothing, and a flush to finish. Not one of them may reach open(), or every 55 ms
+     * of play would be a panel reload. */
+    for (int i = 0; i < 200; i++) { set_body(&g, b, 40); save_highscore(40); }
+    CHECK(!file_exists(state_path));                 /* nothing while it plays */
     flush_state();
-    CHECK(file_exists(state_path));
-    CHECK(read_file(state_path, content, sizeof content));
-    CHECK_STR(content, "40\n");
-    CHECK_EQ(pending_best, 0);
+    CHECK(!file_exists(state_path));                 /* and nothing when it ends */
 
-    /* a smaller later run must not shrink or rewrite the file */
-    set_body(&g, b, 5);
-    save_highscore(5);
-    flush_state();
+    /* a smaller later run must not shrink the record. The guard against that lives in
+     * write_best_file, which re-reads the FILE instead of trusting best_len — which is the
+     * only reason it can still refuse with best_len sitting at 0 for the whole run. */
+    {
+        FILE *rf = fopen(state_path, "w");           /* the record the last run left behind */
+        if (rf) { fprintf(rf, "40\n"); fclose(rf); }
+        set_body(&g, b, 5);
+        save_highscore(5);
+        CHECK_EQ(pending_best, 5);                   /* banked, and only banked */
+        flush_state();
+        CHECK(read_file(state_path, content, sizeof content));
+        CHECK_STR(content, "40\n");                  /* the file refused to shrink */
+    }
+
+    /* the case the HUD's wording rests on, and the one Brodie asked for by name: a record
+     * IS on disk (7), this run reaches 40, and every frame in between must still report 7.
+     * The card prints LEN 40 beside LAST HIGH SCORE 7 — true about both, and nothing looks
+     * broken to the player who is beating it. */
+    {
+        FILE *rf = fopen(state_path, "w");
+        if (rf) { fprintf(rf, "7\n"); fclose(rf); }
+        int seen = 99;
+        load_highscore(&seen);
+        best_len = seen;                             /* exactly what protocol_run does first */
+        CHECK_EQ(best_len, 7);
+        for (int len = 8; len <= 40; len++) { set_body(&g, b, len); save_highscore(len); }
+        CHECK_EQ(best_len, 7);                       /* the frame never ran ahead of the file */
+        CHECK_EQ(pending_best, 40);                  /* the run's number is safe in the bank */
+        CHECK(read_file(state_path, content, sizeof content));
+        CHECK_STR(content, "7\n");                   /* the file waited for the ending too */
+        flush_state();
+        CHECK(read_file(state_path, content, sizeof content));
+        CHECK_STR(content, "40\n");                  /* the whole bank, in one write */
+        CHECK_EQ(best_len, 7);                       /* and the frame still says LAST, not NOW */
+    }
+
+    /* the ending QML never gets to ask for: SIGTERM. The handler is what makes
+     * stopEngine's 600 ms grace and the shell's own teardown safe, so test it the way
+     * it fires — in a process that is about to die. fork() because it ends in _exit();
+     * the parent only gets to judge what the child left on disk. */
+    set_body(&g, b, 40);
+    save_highscore(63);           /* 63 with a 40-point body: what matters is the number,
+                                     and 63 is the length the run really reached */
     CHECK(read_file(state_path, content, sizeof content));
-    CHECK_STR(content, "40\n");
-    /* nor may a flush of nothing rewrite it */
-    flush_state();
+    CHECK_STR(content, "40\n");                    /* banked: the file has not moved */
+    CHECK_EQ(pending_best, 63);
+    save_setup(1, 30);                             /* the card's settings ride together */
+    CHECK(!file_exists(setup_path));               /* ... also banked, also not on disk */
+    fflush(stdout);
+    pid_t kid = fork();
+    CHECK(kid >= 0);
+    if (kid == 0) { terminate_handler(SIGTERM); _exit(99); }
+    int status = 0;
+    CHECK_EQ(waitpid(kid, &status, 0), kid);
+    CHECK(WIFEXITED(status));
+    CHECK_EQ(WEXITSTATUS(status), 0);              /* the handler's own _exit(0) */
     CHECK(read_file(state_path, content, sizeof content));
-    CHECK_STR(content, "40\n");
-    /* a bigger one does */
-    set_body(&g, b, 41);
-    save_highscore(41);
-    flush_state();
-    CHECK(read_file(state_path, content, sizeof content));
-    CHECK_STR(content, "41\n");
-    CHECK_EQ(best_len, 41);
+    CHECK_STR(content, "63\n");
+    CHECK(read_file(setup_path, content, sizeof content));
+    CHECK_STR(content, "1 30\n");
 
     /* the contrast that makes the above mean something: outside protocol mode a
-     * save writes immediately, on death / restart / quit */
-    protocol_mode = 0;
+     * save writes immediately, on death / restart / quit.
+     * A fresh world first, and it is load-bearing: save_highscore only ever raises
+     * best_len, so the 63 the fork test left standing would veto every write below and
+     * the checks would be grading a no-op that happened to leave an old file in place. */
+    world_reset(10, 6);
+    protocol_mode = 0; save_on_beat = 1;
     snprintf(state_path, sizeof state_path, "%s/term_highscore", run_dir);
     unlink(state_path);
     save_highscore(17);
@@ -1962,7 +2047,7 @@ static void test_save_data_discipline(void) {
     CHECK_EQ(best, 0);
 
     /* --state may name a folder the plugin checkout does not have yet */
-    protocol_mode = 0;
+    protocol_mode = 0; save_on_beat = 1;
     snprintf(state_path, sizeof state_path, "%s/made/by/ensure/parent", run_dir);
     write_best_file(9);
     CHECK(file_exists(state_path));
@@ -2085,6 +2170,43 @@ static void test_setup_persists(void) {
     CHECK_EQ(handle_command(&g, "{\"cmd\":\"restart\"}"), 1);
     CHECK_EQ(g.wrap, 1);
     CHECK_EQ(g.tick_ms, MAX_TICK_MS);
+
+    /* the overlay's face: the SAME two commands, banked, because its file lives inside
+     * the plugin folder that the shell inotify-watches. A dozen slider drags while the
+     * card is up must be zero writes, and the value that lands at the end of the run is
+     * the last one the ENGINE accepted (clamped), not the last one somebody typed. */
+    world_reset(20, 12);
+    blank_game(&g);
+    g.started = 0;
+    g.tick_ms = TICK_MS;                           /* the harness trap: a blank game has tick_ms 0 */
+    protocol_mode = 1; save_on_beat = 0;
+    snprintf(setup_path, sizeof setup_path, "%s/setup_banked", run_dir);
+    unlink(setup_path);
+    handle_command(&g, "{\"cmd\":\"wrap\",\"on\":1}");
+    handle_command(&g, "{\"cmd\":\"speed\",\"ms\":30}");
+    CHECK(!file_exists(setup_path));                 /* the card is up: nothing written */
+    CHECK_EQ(pending_setup_ms, 30);
+    CHECK_EQ(pending_setup_wrap, 1);
+    for (int i = 0; i < 60; i++) {
+        char cmd[64];
+        snprintf(cmd, sizeof cmd, "{\"cmd\":\"speed\",\"ms\":%d}", 40 + i);
+        handle_command(&g, cmd);
+    }
+    CHECK(!file_exists(setup_path));                 /* not one of the sixty either */
+    CHECK_EQ(pending_setup_ms, 99);
+    handle_command(&g, "{\"cmd\":\"speed\",\"ms\":99999}");   /* clamped, still banked */
+    CHECK_EQ(g.tick_ms, MAX_TICK_MS);
+    CHECK_EQ(pending_setup_ms, MAX_TICK_MS);
+    flush_state();
+    CHECK(read_file(setup_path, content, sizeof content));
+    CHECK_STR(content, "1 200\n");                   /* one burst, the last accepted value */
+    CHECK_EQ(pending_setup_ms, -1);                  /* bank spent */
+    /* a spent bank writes nothing at all: were it to re-write, every flush (and the
+     * overlay sends two at close — flush then quit) would be a second reload */
+    unlink(setup_path);
+    flush_state();
+    CHECK(!file_exists(setup_path));
+    protocol_mode = 0; save_on_beat = 1;
     setup_path[0] = 0;
 }
 
@@ -2281,7 +2403,7 @@ static void test_the_run_begins_when_told(void) {
     CHECK_EQ(g.wrap, 0);
 
     /* restart replays under the SAME setup the player chose */
-    protocol_mode = 1;                                   /* banks, never writes */
+    protocol_mode = 1; save_on_beat = 0;                                   /* banks, never writes */
     g.tick_ms = 30;
     g.wrap = 1;
     static Point long_body[20];
@@ -2299,7 +2421,7 @@ static void test_the_run_begins_when_told(void) {
     CHECK_EQ(g.started, 0);
     CHECK_EQ(g.tick_ms, 45);
     CHECK_EQ(g.wrap, 1);
-    protocol_mode = 0;
+    protocol_mode = 0; save_on_beat = 1;
 }
 
 /* ------------------------------------------------------------------ */
