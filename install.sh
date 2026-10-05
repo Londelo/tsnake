@@ -59,17 +59,18 @@ make -C "$SRC" snake >/dev/null
 # The entry-point name is the cache key. Hash the bytes so identical content
 # keeps the same URL (no needless reload) and any edit gets a brand-new one.
 #
-# The separator is an underscore, NOT a dash, and that is load-bearing: Qt derives
-# a component's type name from the file's base name, and `-` is not legal in a QML
-# identifier. `Overlay-6099905284bf.qml` was measured failing with
-# `WARN scene: … File name case mismatch` and then `QQmlVMEMetaObject: Internal
-# error - attempted to evaluate a function in an invalid context`, which the host
-# reports through its own broken error path (`WARN scene: @shell.qml[1357:-1]:
-# ReferenceError: errorString is not defined`) so no window ever appeared and the
-# bar button looked dead. Not one .qml under /usr/share/omarchy/shell has a dash
-# in its name — a QML file name has to be an identifier.
+# The separator is NO separator: Qt derives a component's type name from the file's
+# base name, and a QML identifier is [A-Za-z0-9_$] only. `Overlay-<hash>.qml` was
+# measured failing to instantiate — `WARN scene: … File name case mismatch` then
+# `QQmlVMEMetaObject: Internal error - attempted to evaluate a function in an
+# invalid context` — which the host reports through its own broken panel
+# onLoadFailed path (shell.qml:1357 references an undefined `errorString`), so no
+# window appeared and the bar button looked dead. Not one .qml under
+# /usr/share/omarchy/shell has anything but letters, digits and dots in its name;
+# the hashed name stays inside that shape so the file name can never be the reason
+# a load fails.
 STAMP="$(printf '%s' "$(sha256sum "$SRC/Overlay.qml" | cut -c1-12)" | tr -dc '[:alnum:]')"
-ENTRY="Overlay_${STAMP}.qml"
+ENTRY="Overlay${STAMP}.qml"
 
 # The record and the card's settings are the user's, not the build's: carry them
 # across the swap so neither a reinstall nor a --fresh can cost anyone a high score.
@@ -112,10 +113,10 @@ jq --arg entry "$ENTRY" '.entryPoints.overlay = $entry' "$SRC/manifest.json" >"$
 mv -f "$DEST/manifest.json.tmp" "$DEST/manifest.json"
 chmod 0644 "$DEST/manifest.json"
 
-# Old entries would otherwise pile up in the watched folder forever — including
-# any dashed one left by the version of this script that thought `-` was legal.
-find "$DEST" -maxdepth 1 \( -name 'Overlay_*.qml' -o -name 'Overlay-*.qml' \) \
-  ! -name "$ENTRY" -delete
+# Old entries would otherwise pile up in the watched folder forever — including the
+# underscored and dashed ones this script has already tried.
+find "$DEST" -maxdepth 1 \( -name 'Overlay[a-z0-9]*.qml' -o -name 'Overlay_*.qml' \
+  -o -name 'Overlay-*.qml' \) ! -name "$ENTRY" -delete
 
 for f in highscore setup; do
   if [[ -n $SAVED && -f $SAVED/$f ]]; then
