@@ -50,6 +50,10 @@ static int square_cells = 0;    /* --square-cells: cells are square, so no 2:1
                                    aspect compensation (see stride_len_for) */
 static char state_path[512];    /* --state: the best-length file, engine-owned */
 static char setup_path[512];    /* --setup: the saved setup (wrap + tick_ms), engine-owned */
+static int save_on_beat = 1;    /* write the record the instant it is beaten (the curses
+                                   face always does). protocol_run clears it: the overlay's
+                                   files live INSIDE the plugin folder, which the shell
+                                   watches, so a write is a panel reload — see save_highscore */
 static int best_len;            /* best length ever, as frames report it */
 static int pending_best;        /* banked since the last flush, not yet on disk */
 
@@ -133,14 +137,19 @@ static int rng(int limit) {
 }
 
 /* $HOME/.tsnake_highscore (the cwd if HOME is unset), or whatever --state named.
-   The overlay names `$HOME/.local/state/tsnake/highscore`, which is OUTSIDE
-   ~/.config/omarchy/plugins — the shell runs `inotifywait -m -r -e
-   close_write,create,delete,move` over the plugins dir only
-   (services/PluginRegistry.qml:663, pluginsDir at :11) and reloads every panel on
-   any hit, so a save inside the plugin folder would tear the board down under the
-   player. The terminal and the overlay therefore keep SEPARATE records: different
-   files, same meaning. The engine is each file's ONLY writer — a second writer
-   would be a second set of rules about what the best length means. */
+   The overlay names a file INSIDE its own plugin folder, so that `omarchy plugin
+   remove` — which only ever touches $PLUGINS_DIR/$id (bin/omarchy-plugin-remove:10,:71)
+   — takes the record with it and leaves no tsnake anywhere on the machine. That is a
+   deliberate reversal: the state used to live under $HOME/.local/state precisely to get
+   it OUT of that folder, because the shell runs `inotifywait -m -r -q -e
+   close_write,create,delete,move` over the plugins dir (services/PluginRegistry.qml:663,
+   pluginsDir at :11) and reloads every panel on any hit to a NON-hidden path
+   (localPluginIdForPath skips a leading ".", :735; shell.qml:1476 → reloadPlugins).
+   Living in the watched folder is exactly what makes the timing of a save a rule and not
+   a preference — the whole argument is at save_highscore.
+   The terminal and the overlay still keep SEPARATE records: different files, the same
+   meaning. The engine is each file's ONLY writer — a second writer would be a second
+   set of rules about what the best length means. */
 static const char *highscore_path(void) {
     static char path[512];
     if (state_path[0]) return state_path;
@@ -222,43 +231,61 @@ static void write_best_file(int length) {
     }
 }
 
-/* The record is written the moment it is BEATEN — in both faces, and by every path
-   that can reach a length, because write_best_file() no-ops unless the number really
-   beats what is on disk. That is one tiny write per new record, not one per tick.
-   Under --protocol this used to only BANK the run and let flush_state() write it later,
-   on the theory that a write during play would reload the overlay; that theory died
-   with the plugin-folder path (see highscore_path), and keeping it anyway was exactly
-   Brodie's bug: an engine the shell never told to stop — SIGKILL, a shell crash, an
-   orphan left by a reload — lost the record still sitting in its RAM, and the next
-   summon cheerfully read the old file. A number you cannot lose is a number that is on
-   disk. The terminal build has always written as it played; now both faces agree. */
+/* Two policies, decided by save_on_beat, because the two faces keep their files in
+   two different places — and where the file is decides when it may be written.
+
+   The curses face ($HOME/.tsnake_highscore, nobody watches $HOME) writes the moment
+   the number is beaten. Nothing can go wrong with that, and a number that is only in
+   RAM is a number you can lose.
+
+   The overlay's face BANKS and writes at the end of the run. Its files live INSIDE the
+   plugin folder, which is what makes uninstalling take the player's history with it —
+   and the shell watches that folder (`inotifywait -m -r -q -e
+   close_write,create,delete,move`, PluginRegistry.qml:663) and reloads every plugin on
+   any change to a NON-hidden path (localPluginIdForPath ignores a leading ".",
+   :735; shell.qml:1476 → a 150 ms timer → reloadPlugins). So a write during play is a
+   panel reload during play: the game dies under the player because they ate something.
+   The bank is therefore flushed at every ending that can be caught — `flush`, `quit`,
+   stdin EOF, and SIGTERM/SIGHUP/SIGINT through terminate_handler(), which writes with
+   bare open()/write() and never touches curses or the heap. SIGKILL is the one ending
+   that still loses a record: the shell would have to promise not to use it, and it
+   doesn't. That is the price of living in the watched folder, paid deliberately. */
 static void save_highscore(int length) {
     int beat_it = length > best_len;
     if (beat_it) best_len = length;
     if (length > pending_best) pending_best = length;
-    if (beat_it) write_best_file(length);
+    if (beat_it && save_on_beat) write_best_file(length);
 }
 
-/* Still asked for by the overlay's `flush`/`quit`, and still the last word for a
-   length the bank caught but a write could not (a read-only mount, a full disk): by
-   then the record is normally already on disk and this merely clears the bank. */
+/* The overlay's save. Under --protocol this is not a backstop, it IS the write: both
+   files are banked for the whole run and land here, once, when the run ends — asked for
+   by `flush` and `quit`, and by the signal handler's own copy of the same two writes.
+   The terminal build reaches it too (and has nothing in the bank to do), so one call
+   site covers both faces. */
+static void flush_setup(void);           /* defined with the setup card below */
+
 static void flush_state(void) {
     if (pending_best > 0) write_best_file(pending_best);
     pending_best = 0;
+    flush_setup();                       /* one burst at the end of the run, not one per edit */
 }
 
 /* ---- the setup card, persisted ----------------------------------------
    The card is two decisions: does the wall kill, how fast does the snake go. They are
    saved as two integers (`wrap tick_ms`, one line) beside the high score, in the same
-   unwatched directory, for the same reason and with the same hardening. Loaded BEFORE
-   START, so the card paints the restored answer out of real frames — the QML keeps no
-   opinion of its own and needs no storage of its own: one source of truth, the engine.
+   directory, for the same reason and with the same hardening. Loaded BEFORE START, so
+   the card paints the restored answer out of real frames — the QML keeps no opinion of
+   its own and needs no storage of its own: one source of truth, the engine.
 
-   Written the moment the player changes one, not at close, for the reason the high
-   score learned it: a setting that lives only in RAM is a setting you lose when the
-   shell takes the overlay down without asking. Both writer call sites are the two
-   setup commands, which the engine already refuses once the run has begun — so this
-   cannot fire during play, only while the card is up. */
+   The curses face writes each change as it happens. The overlay BANKS it (that's what
+   `pending_setup_ms` is for: -1 means "nothing waiting", which is why 0 can't double as
+   the sentinel — 0 is not a legal tick_ms, but being explicit costs nothing) and writes
+   at the end of the run with the record, because in the plugin folder a write is a
+   panel reload. Both writer call sites are the two setup commands, which the engine
+   already refuses once the run has begun, so even the immediate form could only ever
+   fire while the card was up — and the card is exactly when a reload would be felt. */
+static int pending_setup_ms = -1;        /* -1: nothing waiting; else the ms to write */
+static int pending_setup_wrap;
 static const char *setup_file_path(void) {
     static char path[512];
     if (setup_path[0]) return setup_path;
@@ -289,7 +316,7 @@ static void load_setup(int *wrap, int *tick_ms) {
     fclose(f);
 }
 
-static void save_setup(int wrap, int tick_ms) {
+static void setup_write(int wrap, int tick_ms) {
     const char *path = setup_file_path();
     if (!ensure_parent_dir(path)) return;
     /* O_NOFOLLOW for the same reason lstat guards the read: the directory is one other
@@ -304,6 +331,22 @@ static void save_setup(int wrap, int tick_ms) {
     }
 }
 
+static void save_setup(int wrap, int tick_ms) {
+    if (save_on_beat) {                    /* curses face: nothing watches $HOME */
+        setup_write(wrap, tick_ms);
+        pending_setup_ms = -1;
+        return;
+    }
+    pending_setup_wrap = wrap;             /* overlay: bank it, write it at the end */
+    pending_setup_ms = tick_ms;
+}
+
+static void flush_setup(void) {
+    if (pending_setup_ms < 0) return;
+    setup_write(pending_setup_wrap, pending_setup_ms);
+    pending_setup_ms = -1;
+}
+
 /* The shell can take the overlay's Loader down without asking: a plugin reload,
    a bar-config change, a logout. Quickshell's Process destructor then SIGTERMs
    the child, which with the default disposition dies with the banked best still
@@ -315,41 +358,67 @@ static void save_setup(int wrap, int tick_ms) {
    no load_highscore — none of those are safe to call from a handler.
    Installed in protocol mode only; the terminal build writes as it plays, so it
    keeps nothing in RAM that a signal could strand. */
+/* best-effort parent creation, mkdir() alone: the first save of a dying process must
+   still land if the overlay's directory is missing. Split out because BOTH saved files
+   are written here, and a hand-rolled path walk duplicated twice is a bug waiting. */
+static void raw_ensure_parent(const char *path) {
+    char dir[512];
+    int i = 0;
+    while (path[i] && i < (int)sizeof(dir) - 1) { dir[i] = path[i]; i++; }
+    dir[i] = 0;
+    while (i > 0 && dir[i - 1] != '/') i--;
+    if (i <= 1) return;
+    dir[i - 1] = 0;                                /* drop the trailing slash */
+    for (int j = 1; dir[j]; j++) {
+        if (dir[j] != '/') continue;
+        char held = dir[j];
+        dir[j] = 0;
+        mkdir(dir, 0700);
+        dir[j] = held;
+    }
+    mkdir(dir, 0700);
+}
+
+static void raw_write(const char *path, const char *text, int len) {
+    if (!path || !path[0] || len <= 0) return;
+    raw_ensure_parent(path);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    if (fd < 0) return;
+    ssize_t wrote = write(fd, text, (size_t)len);
+    (void)wrote;
+    close(fd);
+}
+
+/* digits laid out by hand — printf/sprintf are not async-signal-safe */
+static int raw_int(char *out, int v) {
+    char digits[16];
+    int n = 0, m = 0;
+    if (v < 0) { out[m++] = '-'; v = -v; }
+    do { digits[n++] = (char)('0' + v % 10); v /= 10; } while (v > 0);
+    while (n > 0) out[m++] = digits[--n];
+    return m;
+}
+
 static void terminate_handler(int sig) {
     (void)sig;
-    const char *path = highscore_path();
     int v = best_len;
     if (pending_best > v) v = pending_best;
-    if (path && path[0] && v > 0) {
-        char digits[16], buf[24];
-        int n = 0, m = 0;
-        do { digits[n++] = (char)('0' + v % 10); v /= 10; } while (v > 0);
-        while (n > 0) buf[m++] = digits[--n];
+    if (v > 0) {
+        char buf[24];
+        int m = raw_int(buf, v);
         buf[m++] = '\n';
-        /* best-effort parent creation, mkdir() alone: the first save of a dying
-           process must still land if the overlay's state dir is missing */
-        char dir[512];
-        int i = 0;
-        while (path[i] && i < (int)sizeof(dir) - 1) { dir[i] = path[i]; i++; }
-        dir[i] = 0;
-        while (i > 0 && dir[i - 1] != '/') i--;
-        if (i > 1) {
-            dir[i - 1] = 0;                        /* drop the trailing slash */
-            for (int j = 1; dir[j]; j++) {
-                if (dir[j] != '/') continue;
-                char held = dir[j];
-                dir[j] = 0;
-                mkdir(dir, 0700);
-                dir[j] = held;
-            }
-            mkdir(dir, 0700);
-        }
-        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
-        if (fd >= 0) {
-            ssize_t wrote = write(fd, buf, (size_t)m);
-            (void)wrote;
-            close(fd);
-        }
+        raw_write(highscore_path(), buf, m);
+    }
+    /* The setup is banked exactly like the record now, so it gets the same treatment:
+       a panel the shell tore down must not come back forgetting the wall and the dial
+       the player set on the card ten seconds ago. */
+    if (pending_setup_ms >= 0) {
+        char buf[24];
+        int m = raw_int(buf, pending_setup_wrap);
+        buf[m++] = ' ';
+        m += raw_int(buf + m, pending_setup_ms);
+        buf[m++] = '\n';
+        raw_write(setup_file_path(), buf, m);
     }
     _exit(0);
 }
@@ -1367,6 +1436,10 @@ static int protocol_run(void) {
     signal(SIGTERM, terminate_handler);
     signal(SIGHUP, terminate_handler);
     signal(SIGINT, terminate_handler);
+    /* The overlay's files live INSIDE the plugin folder, so they are written at the end
+       of a run and not while it plays: the shell watches that folder and a write is a
+       panel reload. See save_highscore for the whole argument. */
+    save_on_beat = 0;
     setvbuf(stdout, NULL, _IOLBF, 0);
     Game g;
     game_init(&g);
