@@ -81,8 +81,10 @@ if [[ -d $DEST ]]; then
     if [[ -f $DEST/$f ]]; then cp -p "$DEST/$f" "$SAVED/$f"; fi
   done
 fi
+STAGE=""
 cleanup_saved() {
   if [[ -n $SAVED && -d $SAVED ]]; then rm -rf "$SAVED"; fi
+  if [[ -n $STAGE && -d $STAGE ]]; then rm -rf "$STAGE"; fi
 }
 trap cleanup_saved EXIT
 
@@ -90,39 +92,76 @@ if (( FRESH )); then
   if [[ -d $DEST ]]; then omarchy-plugin-remove "$ID" --yes >/dev/null; fi
 fi
 
-# Every write in here is a `close_write` the shell watches (PluginRegistry.qml:663)
-# and each one asks for a full plugin reload, so a file whose bytes already match
-# is left strictly alone — an unchanged install should barely touch the folder.
-copy_if_changed() {
-  local src="$1" dest="$2" mode="$3"
-  if [[ -f $dest ]] && cmp -s "$src" "$dest"; then return 0; fi
-  install -m "$mode" "$src" "$dest"
+# Build the whole folder OUTSIDE the watched tree, then move it in as one rename.
+#
+# Every create/close_write under ~/.config/omarchy/plugins is a reload request
+# (services/PluginRegistry.qml:663), and reloadPlugins (shell.qml:1452) answers a
+# request that lands while one is already in flight by latching pluginReloadPending
+# and returning — after shell.unloadPanels() has already set panelEntries = [].
+# Nothing restores it but an onScanFinished that never comes, so the Instantiator at
+# shell.qml:1322 has no delegates, no panel Loaders exist, and summon answers "ok"
+# while loading nothing: a dead bar button with a live-looking widget in the bar.
+# Measured: seven files written one at a time = 18 "Local plugin changed, reloading"
+# lines in one second, and the overlay never loaded again until the shell restarted.
+#
+# A dot-prefixed path is dropped outright by localPluginIdForPath
+# (PluginRegistry.qml:728-740, "Hidden entries are not plugins: clone staging dirs,
+# remove backups") — the watcher never even asks for a reload — so staging there is
+# silent and the swap itself costs two events instead of eighteen.
+# A no-op install must be literally silent: if every byte is already what the repo
+# says, the folder is not touched at all, so the watcher sees nothing and the shell
+# is never asked to reload for nothing.
+already_installed() {
+  [[ -d $DEST ]] || return 1
+  cmp -s "$SRC/snake" "$DEST/snake" || return 1
+  cmp -s "$SRC/Overlay.qml" "$DEST/$ENTRY" || return 1
+  local f
+  for f in BarWidget.qml GlyphLab.qml README.md; do
+    cmp -s "$SRC/$f" "$DEST/$f" || return 1
+  done
+  jq -e --arg entry "$ENTRY" '.entryPoints.overlay == $entry' "$DEST/manifest.json" \
+    >/dev/null 2>&1 || return 1
+  [[ -z $(find "$DEST" -maxdepth 1 \( -name 'Overlay[a-z0-9]*.qml' -o \
+    -name 'Overlay_*.qml' -o -name 'Overlay-*.qml' \) ! -name "$ENTRY" -print -quit) ]] || return 1
+  return 0
 }
 
-mkdir -p "$DEST"
-chmod 0755 "$DEST"
-copy_if_changed "$SRC/snake" "$DEST/snake" 0755
-copy_if_changed "$SRC/Overlay.qml" "$DEST/$ENTRY" 0644
-copy_if_changed "$SRC/BarWidget.qml" "$DEST/BarWidget.qml" 0644
-copy_if_changed "$SRC/GlyphLab.qml" "$DEST/GlyphLab.qml" 0644
-copy_if_changed "$SRC/README.md" "$DEST/README.md" 0644
+if (( ! FRESH )) && already_installed; then
+  echo "already installed, nothing written: $DEST"
+  echo "then:  omarchy-shell shell summon $ID"
+  exit 0
+fi
+
+STAGE="$PLUGINS_DIR/.$ID.stage.$$"
+rm -rf "$STAGE"
+mkdir -m 0755 "$STAGE"
+install -m 0755 "$SRC/snake" "$STAGE/snake"
+install -m 0644 "$SRC/Overlay.qml" "$STAGE/$ENTRY"
+install -m 0644 "$SRC/BarWidget.qml" "$STAGE/BarWidget.qml"
+install -m 0644 "$SRC/GlyphLab.qml" "$STAGE/GlyphLab.qml"
+install -m 0644 "$SRC/README.md" "$STAGE/README.md"
 
 # The manifest points at this content's URL. Built here, never committed: a plain
 # checkout still carries "Overlay.qml" as its entry point.
-jq --arg entry "$ENTRY" '.entryPoints.overlay = $entry' "$SRC/manifest.json" >"$DEST/manifest.json.tmp"
-mv -f "$DEST/manifest.json.tmp" "$DEST/manifest.json"
-chmod 0644 "$DEST/manifest.json"
-
-# Old entries would otherwise pile up in the watched folder forever — including the
-# underscored and dashed ones this script has already tried.
-find "$DEST" -maxdepth 1 \( -name 'Overlay[a-z0-9]*.qml' -o -name 'Overlay_*.qml' \
-  -o -name 'Overlay-*.qml' \) ! -name "$ENTRY" -delete
+jq --arg entry "$ENTRY" '.entryPoints.overlay = $entry' "$SRC/manifest.json" \
+  >"$STAGE/manifest.json"
+chmod 0644 "$STAGE/manifest.json"
+jq -e --arg entry "$ENTRY" '.entryPoints.overlay == $entry' "$STAGE/manifest.json" >/dev/null \
+  || fail "generated manifest does not point at $ENTRY"
 
 for f in highscore setup; do
-  if [[ -n $SAVED && -f $SAVED/$f ]]; then
-    install -m 0600 "$SAVED/$f" "$DEST/$f"
-  fi
+  if [[ -n $SAVED && -f $SAVED/$f ]]; then install -m 0600 "$SAVED/$f" "$STAGE/$f"; fi
 done
+
+# Verified while the old install is still intact: a bad copy must never be the
+# reason the working folder is gone.
+cmp -s "$SRC/Overlay.qml" "$STAGE/$ENTRY" || fail "staged overlay does not match the repo"
+for f in snake BarWidget.qml GlyphLab.qml README.md; do
+  cmp -s "$SRC/$f" "$STAGE/$f" || fail "staged $f does not match the repo"
+done
+
+if [[ -d $DEST ]]; then rm -rf "$DEST"; fi
+mv "$STAGE" "$DEST"
 
 for f in snake BarWidget.qml GlyphLab.qml README.md; do
   cmp -s "$SRC/$f" "$DEST/$f" || fail "installed $f does not match the repo"
