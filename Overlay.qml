@@ -80,6 +80,12 @@ Item {
   readonly property string stateRoot: home !== "" ? home + "/.local/state"
                                                    : String(Quickshell.stateDir)
   readonly property string stateFile: stateRoot + "/tsnake/highscore"
+  // The card's own two answers (wrap, tick_ms) live beside it, in the same unwatched
+  // directory, and the ENGINE reads and writes them — this file never does. That is why
+  // the card needs no Settings object: it paints wrap and speed out of frames, and the
+  // engine loads the saved ones before its first frame exists, so what you left is what
+  // comes back.
+  readonly property string setupFile: stateRoot + "/tsnake/setup"
 
   // Engine binary resolution order. Deliberately NEVER inside the plugin
   // folder: the shell inotify-watches all of ~/.config/omarchy/plugins for
@@ -294,7 +300,7 @@ Item {
       return
     }
     engineProc.command = [cands[root.engineIndex], "--protocol", "--square-cells",
-                          "--state", root.stateFile]
+                          "--state", root.stateFile, "--setup", root.setupFile]
     root.launchPending = true
     engineProc.running = true
     startWatchdog.restart()
@@ -359,8 +365,12 @@ Item {
     root.best = 0
     root.dirX = 1
     root.dirY = 0
-    // A fresh engine is a fresh setup: it has not been started, and it is running
-    // at the default tick, whatever the last run had been set to.
+    // A fresh engine is a fresh setup: it has not been started, and nothing of the last
+    // run's setup survives here — these are PLACEHOLDERS for the one frame's worth of
+    // silence before the engine speaks, not the values the card will show. The engine
+    // loads the SAVED wrap and speed before it emits anything, so the numbers the player
+    // left are the numbers that arrive; blanking to the defaults is what keeps a broken
+    // engine from wearing the last run's clothes.
     root.started = 0
     root.tickMs = root.baseTickMs
     root.askedMs = -1

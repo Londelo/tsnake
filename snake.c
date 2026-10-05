@@ -49,6 +49,7 @@ static int protocol_mode = 0;   /* NDJSON over stdin/stdout, no curses at all */
 static int square_cells = 0;    /* --square-cells: cells are square, so no 2:1
                                    aspect compensation (see stride_len_for) */
 static char state_path[512];    /* --state: the best-length file, engine-owned */
+static char setup_path[512];    /* --setup: the saved setup (wrap + tick_ms), engine-owned */
 static int best_len;            /* best length ever, as frames report it */
 static int pending_best;        /* banked since the last flush, not yet on disk */
 
@@ -131,11 +132,15 @@ static int rng(int limit) {
     return rand() % limit;
 }
 
-/* ~/.tsnake_highscore (the cwd if HOME is unset), or whatever --state named.
-   For the overlay that path is inside the plugin folder on purpose: `omarchy
-   plugin remove` rm -rf's the folder, so the save dies with the plugin. The
-   engine is that file's ONLY writer — a second writer would be a second set of
-   rules about what the best length means. */
+/* $HOME/.tsnake_highscore (the cwd if HOME is unset), or whatever --state named.
+   The overlay names `$HOME/.local/state/tsnake/highscore`, which is OUTSIDE
+   ~/.config/omarchy/plugins — the shell runs `inotifywait -m -r -e
+   close_write,create,delete,move` over the plugins dir only
+   (services/PluginRegistry.qml:663, pluginsDir at :11) and reloads every panel on
+   any hit, so a save inside the plugin folder would tear the board down under the
+   player. The terminal and the overlay therefore keep SEPARATE records: different
+   files, same meaning. The engine is each file's ONLY writer — a second writer
+   would be a second set of rules about what the best length means. */
 static const char *highscore_path(void) {
     static char path[512];
     if (state_path[0]) return state_path;
@@ -217,26 +222,86 @@ static void write_best_file(int length) {
     }
 }
 
-/* The terminal build saves on death, on restart and on quit, where a write is
-   harmless. Under --protocol those calls only BANK the run: the shell watches
-   the whole plugins directory for close_write/create/delete/move and reloads
-   plugins on any event inside one, and reloading rebuilds the overlay's Loader
-   — so a save that landed while the game-over panel was up would destroy and
-   recreate the panel under the player's eyes. flush_state() is the only path to
-   the disk there, and the overlay calls it once nothing is on screen. */
+/* The record is written the moment it is BEATEN — in both faces, and by every path
+   that can reach a length, because write_best_file() no-ops unless the number really
+   beats what is on disk. That is one tiny write per new record, not one per tick.
+   Under --protocol this used to only BANK the run and let flush_state() write it later,
+   on the theory that a write during play would reload the overlay; that theory died
+   with the plugin-folder path (see highscore_path), and keeping it anyway was exactly
+   Brodie's bug: an engine the shell never told to stop — SIGKILL, a shell crash, an
+   orphan left by a reload — lost the record still sitting in its RAM, and the next
+   summon cheerfully read the old file. A number you cannot lose is a number that is on
+   disk. The terminal build has always written as it played; now both faces agree. */
 static void save_highscore(int length) {
-    if (length > best_len) best_len = length;
-    if (protocol_mode) {
-        if (length > pending_best) pending_best = length;
-        return;
-    }
-    write_best_file(length);
+    int beat_it = length > best_len;
+    if (beat_it) best_len = length;
+    if (length > pending_best) pending_best = length;
+    if (beat_it) write_best_file(length);
 }
 
-/* the one permitted write, and only ever from a closed overlay */
+/* Still asked for by the overlay's `flush`/`quit`, and still the last word for a
+   length the bank caught but a write could not (a read-only mount, a full disk): by
+   then the record is normally already on disk and this merely clears the bank. */
 static void flush_state(void) {
     if (pending_best > 0) write_best_file(pending_best);
     pending_best = 0;
+}
+
+/* ---- the setup card, persisted ----------------------------------------
+   The card is two decisions: does the wall kill, how fast does the snake go. They are
+   saved as two integers (`wrap tick_ms`, one line) beside the high score, in the same
+   unwatched directory, for the same reason and with the same hardening. Loaded BEFORE
+   START, so the card paints the restored answer out of real frames — the QML keeps no
+   opinion of its own and needs no storage of its own: one source of truth, the engine.
+
+   Written the moment the player changes one, not at close, for the reason the high
+   score learned it: a setting that lives only in RAM is a setting you lose when the
+   shell takes the overlay down without asking. Both writer call sites are the two
+   setup commands, which the engine already refuses once the run has begun — so this
+   cannot fire during play, only while the card is up. */
+static const char *setup_file_path(void) {
+    static char path[512];
+    if (setup_path[0]) return setup_path;
+    const char *home = getenv("HOME");
+    if (home && *home)
+        snprintf(path, sizeof(path), "%s/.tsnake_setup", home);
+    else
+        snprintf(path, sizeof(path), ".tsnake_setup");
+    return path;
+}
+
+/* Two integers, or nothing at all: an unreadable, planted, oversized, symlinked or
+   half-written file leaves the defaults standing rather than handing the game a
+   frozen tick or a busy-spinning one. No `best` in here — that file is the record's
+   only home, and a second copy of it would be a second opinion. */
+static void load_setup(int *wrap, int *tick_ms) {
+    *wrap = 0;
+    *tick_ms = TICK_MS;
+    const char *path = setup_file_path();
+    if (!state_file_trustworthy(path)) return;
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    int w = 0, ms = 0;
+    if (fscanf(f, "%d %d", &w, &ms) == 2) {
+        if (w == 0 || w == 1) *wrap = w;
+        if (ms >= MIN_TICK_MS && ms <= MAX_TICK_MS) *tick_ms = ms;
+    }
+    fclose(f);
+}
+
+static void save_setup(int wrap, int tick_ms) {
+    const char *path = setup_file_path();
+    if (!ensure_parent_dir(path)) return;
+    /* O_NOFOLLOW for the same reason lstat guards the read: the directory is one other
+       code can write into, and a save must never become a write to a planted target. */
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    FILE *f = fd < 0 ? NULL : fdopen(fd, "w");
+    if (f) {
+        fprintf(f, "%d %d\n", wrap ? 1 : 0, tick_ms);
+        fclose(f);
+    } else if (fd >= 0) {
+        close(fd);
+    }
 }
 
 /* The shell can take the overlay's Loader down without asking: a plugin reload,
@@ -1051,6 +1116,7 @@ static int handle_key(Game *g, int ch) {
             break;
         case 'x':
             g->wrap = !g->wrap;
+            save_setup(g->wrap, g->tick_ms);   /* the terminal's own card: it persists too */
             break;
         case 'h':
             g->hunt = !g->hunt;
@@ -1223,6 +1289,7 @@ static int handle_command(Game *g, const char *line) {
         int on = -1;
         if (json_int(line, "on", &on) && (on == 0 || on == 1)) g->wrap = on;
         else g->wrap = !g->wrap;
+        save_setup(g->wrap, g->tick_ms);         /* the card remembers it for next time */
         return 1;
     }
     if (strcmp(cmd, "speed") == 0) {
@@ -1230,10 +1297,13 @@ static int handle_command(Game *g, const char *line) {
         int ms = 0;
         if (!json_int(line, "ms", &ms)) return 1;
         /* the clamp lives HERE, not in the UI: a client that sends 0 must not get a
-           busy-spinning tick loop, and one that sends 100000 must not look frozen */
+           busy-spinning tick loop, and one that sends 100000 must not look frozen.
+           Saving the CLAMPED value is the point — the file is a valid setup by
+           construction, so no client can poison tomorrow's card through today's pipe. */
         if (ms < MIN_TICK_MS) ms = MIN_TICK_MS;
         if (ms > MAX_TICK_MS) ms = MAX_TICK_MS;
         g->tick_ms = ms;
+        save_setup(g->wrap, g->tick_ms);
         return 1;
     }
     if (strcmp(cmd, "start") == 0) {
@@ -1249,7 +1319,7 @@ static int handle_command(Game *g, const char *line) {
         return 1;
     }
     if (strcmp(cmd, "restart") == 0) {
-        save_highscore(g->snake.len);            /* banks; no write under --protocol */
+        save_highscore(g->snake.len);            /* writes only if this run beat the record */
         /* game_init memsets the whole Game, so the setup has to be carried across on
            purpose: a restart replays under the wrap and speed the player chose, and
            a restart while still on the setup card stays on the setup card. */
@@ -1276,7 +1346,7 @@ static int handle_command(Game *g, const char *line) {
     }
     if (strcmp(cmd, "flush") == 0) {
         save_highscore(g->snake.len);
-        flush_state();                           /* the only permitted write */
+        flush_state();                           /* clears the bank; usually a no-op write */
         return 1;
     }
     if (strcmp(cmd, "quit") == 0) {
@@ -1305,6 +1375,10 @@ static int protocol_run(void) {
        frames keep flowing so the card paints from real state. */
     g.started = 0;
     load_highscore(&best_len);
+    /* The card comes back as the player left it. Loaded here, BEFORE the tick clock is
+       armed a few lines below, so the very first frame already carries the saved wrap
+       and speed and the card never has to paint a hope of its own. */
+    load_setup(&g.wrap, &g.tick_ms);
 
     char line[256];
     size_t line_len = 0;
@@ -1345,7 +1419,7 @@ static int protocol_run(void) {
         now = now_ms();
         if (now >= next_tick) {
             game_step(&g);
-            save_highscore(g.snake.len);   /* banked every tick, written only at flush */
+            save_highscore(g.snake.len);   /* free unless this tick beat the record */
             tick_no++;
             next_tick = now + tick_delay_ms(&g);
             dirty = 1;
@@ -1367,6 +1441,10 @@ int main(int argc, char **argv) {
             snprintf(state_path, sizeof(state_path), "%s", argv[++i]);
             continue;
         }
+        if (strcmp(argv[i], "--setup") == 0 && i + 1 < argc) {
+            snprintf(setup_path, sizeof(setup_path), "%s", argv[++i]);
+            continue;
+        }
         if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
             int w = 0, h = 0;
             if (sscanf(argv[++i], "%dx%d", &w, &h) == 2 &&
@@ -1380,7 +1458,8 @@ int main(int argc, char **argv) {
         }
         fprintf(stderr,
                 "usage: snake                     play in the terminal\n"
-                "       snake --protocol [--state PATH] [--square-cells] [--size WxH]\n"
+                "       snake --protocol [--state PATH] [--setup PATH]\n"
+                "                        [--square-cells] [--size WxH]\n"
                 "                               speak NDJSON to the Omarchy overlay\n");
         return 2;
     }
@@ -1408,6 +1487,9 @@ int main(int argc, char **argv) {
     game_init(&g);
     int highscore = 0;
     load_highscore(&highscore);
+    /* The terminal has no card, but `x` is the same wrap choice and `TICK_MS` is the
+       same dial, so it honours the same file: you play the way you left the overlay. */
+    load_setup(&g.wrap, &g.tick_ms);
 
     /* Input is drained every POLL_MS so controls feel instant, while the
        snake only advances on its own tick clock — input latency never
