@@ -54,8 +54,10 @@ static int save_on_beat = 1;    /* write the record the instant it is beaten (th
                                    face always does). protocol_run clears it: the overlay's
                                    files live INSIDE the plugin folder, which the shell
                                    watches, so a write is a panel reload — see save_highscore */
-static int best_len;            /* best length ever, as frames report it */
-static int pending_best;        /* banked since the last flush, not yet on disk */
+static int best_len;            /* the record AS IT STANDS ON DISK — frames report this one,
+                                   so it never runs ahead of the file (see save_highscore) */
+static int pending_best;        /* banked since the last flush, not yet on disk: THIS run's
+                                   best, including one that has not been saved yet */
 
 /* Layout: row 0 = header, rows 1..BOARD_H+2 = bordered play field,
    the cell (x, y) is drawn at screen row y+CELL_TOP, screen col x+CELL_LEFT
@@ -252,7 +254,13 @@ static void write_best_file(int length) {
    doesn't. That is the price of living in the watched folder, paid deliberately. */
 static void save_highscore(int length) {
     int beat_it = length > best_len;
-    if (beat_it) best_len = length;
+    /* best_len is what frames report, so it is the record as it STANDS ON DISK and never
+       runs ahead of the file. The curses face can raise it in the same breath as it
+       writes, because the two are the same instant. The overlay's face must not: with the
+       bank still open the file still says last run, and a card that printed a number the
+       file has never held is the lie the HUD's "LAST HIGH SCORE" exists to avoid. The
+       run's own number is pending_best, and it lands whole at the flush. */
+    if (beat_it && save_on_beat) best_len = length;
     if (length > pending_best) pending_best = length;
     if (beat_it && save_on_beat) write_best_file(length);
 }
@@ -1388,7 +1396,8 @@ static int handle_command(Game *g, const char *line) {
         return 1;
     }
     if (strcmp(cmd, "restart") == 0) {
-        save_highscore(g->snake.len);            /* writes only if this run beat the record */
+        save_highscore(g->snake.len);            /* the run's number goes with it: banked
+                                                    here, on disk on the curses face */
         /* game_init memsets the whole Game, so the setup has to be carried across on
            purpose: a restart replays under the wrap and speed the player chose, and
            a restart while still on the setup card stays on the setup card. */
@@ -1415,7 +1424,11 @@ static int handle_command(Game *g, const char *line) {
     }
     if (strcmp(cmd, "flush") == 0) {
         save_highscore(g->snake.len);
-        flush_state();                           /* clears the bank; usually a no-op write */
+        /* On the overlay this is the save: both files land here. The QML sends `flush`
+           immediately before `quit`, so the pair writes once; a client that sent `flush`
+           mid-run would be asking for a write inside the watched folder, and would get
+           the panel reloaded — which is why the overlay only ever sends it on the way out. */
+        flush_state();
         return 1;
     }
     if (strcmp(cmd, "quit") == 0) {
