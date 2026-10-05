@@ -73,24 +73,45 @@ Item {
   readonly property var glyphScale: ({ body: 1.18, corpse: 1.18, food: 1.05, head: 1.0 })
 
   // ---------------------------------------------------------- state paths
-  // The ENGINE owns every byte under the state dir; QML writes nothing there,
-  // and nothing anywhere inside the plugin folder either. HOME + XDG state,
-  // the idiom at plugins/notifications/Service.qml:24-25.
-  readonly property string home: String(Quickshell.env("HOME") || "")
-  readonly property string stateRoot: home !== "" ? home + "/.local/state"
-                                                   : String(Quickshell.stateDir)
-  readonly property string stateFile: stateRoot + "/tsnake/highscore"
-  // The card's own two answers (wrap, tick_ms) live beside it, in the same unwatched
-  // directory, and the ENGINE reads and writes them — this file never does. That is why
-  // the card needs no Settings object: it paints wrap and speed out of frames, and the
-  // engine loads the saved ones before its first frame exists, so what you left is what
-  // comes back.
-  readonly property string setupFile: stateRoot + "/tsnake/setup"
+  // Everything this plugin owns — the record, the card's settings, and the engine
+  // binary itself — lives in the plugin's OWN folder, so `omarchy plugin remove` takes
+  // the whole footprint with it: uninstall and there is nothing left of tsnake. QML
+  // writes none of it; the engine is the only writer and QML only hands it the paths.
+  //
+  // The plugin's own folder, resolved from where THIS file actually is — not a
+  // hardcoded path, because the same item gets loaded out of a clone, a symlink or the
+  // dev checkout. Qt.resolvedUrl(".") is a file:// URL ending in "/".
+  readonly property string pluginDir: {
+    var u = String(Qt.resolvedUrl("."))
+    if (u.lastIndexOf("file://", 0) === 0) u = u.slice(7)
+    if (u.endsWith("/")) u = u.slice(0, -1)
+    return u
+  }
+  readonly property string stateFile: pluginDir + "/highscore"
+  // The card's own two answers (wrap, tick_ms) live beside the record, and the ENGINE
+  // reads and writes them — this file never does. That is why the card needs no Settings
+  // object: it paints wrap and speed out of frames, and the engine loads the saved ones
+  // before its first frame exists, so what you left is what comes back.
+  readonly property string setupFile: pluginDir + "/setup"
+  // Living in the watched folder is a real price, and it is paid on purpose: the shell
+  // inotify-watches ~/.config/omarchy/plugins for close_write/create/delete/move
+  // (PluginRegistry.qml:663) and reloads every plugin on any change to a NON-hidden path
+  // (localPluginIdForPath skips a leading ".", :735; shell.qml:1476 → reloadPlugins), so
+  // a write during play would tear this window down under the player. That is why the
+  // engine BANKS its saves and writes them once, at the end of a run — see
+  // save_highscore() in snake.c. Two consequences to keep in mind: never `make` into this
+  // folder while a game is up, and the state dir is a place the player might not think to
+  // back up.
+  //
+  // There is deliberately NO fallback to the old ~/.local/state/tsnake location. It used to
+  // be a candidate, and it was cut for two reasons: a footprint the uninstaller never
+  // touches is exactly what this move is meant to end, and exec'ing an engine that outlived
+  // its own folder is how a card ends up running the previous binary from a deleted inode.
+  // If this folder has no `snake`, the card must say so — not quietly play somewhere else.
 
-  // Engine binary resolution order. Deliberately NEVER inside the plugin
-  // folder: the shell inotify-watches all of ~/.config/omarchy/plugins for
-  // close_write/create/delete/move and reloads every plugin on any event, so a
-  // `make` in there would rebuild this Loader under the player mid-run.
+  // Engine binary resolution order: an explicit TSNAKE_BIN (debugging), the copy installed
+  // WITH the plugin, then the dev build. Stage one is one machine; the hardcoded dev path is
+  // the one path here that is Brodie's rather than the plugin's.
   property int engineIndex: 0
   property bool engineFailed: false
   property var engineStderr: []
@@ -99,8 +120,7 @@ Item {
     var out = []
     var envBin = String(Quickshell.env("TSNAKE_BIN") || "")
     if (envBin !== "") out.push(envBin)
-    out.push(root.stateRoot + "/tsnake/snake")
-    // Last resort: the dev build (never launched from inside the plugin dir).
+    out.push(root.pluginDir + "/snake")
     out.push("/home/londelo/CastleLondelo/projects/tsnake/snake")
     return out
   }
@@ -644,7 +664,12 @@ Item {
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
           textFormat: Text.PlainText
-          text: "LEN " + root.len + "   BEST " + root.best
+          // LAST HIGH SCORE, not BEST: this file is written at the END of a run (it lives
+          // in the watched plugin folder, so it is not written mid-play), which means the
+          // number standing here is the last saved one — and a player who is on fire has
+          // already passed it. Calling it BEST while LEN is bigger invites the reading
+          // that the game is lying about the score; it isn't, it is showing last run's.
+          text: "LEN " + root.len + "   LAST HIGH SCORE " + root.best
           color: Color.menu.text.toString()
           font.family: Style.font.menuFamily
           font.pixelSize: Style.font.title
@@ -983,7 +1008,10 @@ Item {
         }
         Text {
           textFormat: Text.PlainText
-          text: "LEN " + root.len + " · BEST " + root.best
+          // The same words as the HUD, for the same reason, and they matter more here: the
+          // run is over but the record is not written yet (the save waits for the way out),
+          // so this is the last saved record — not a claim about the run that just died.
+          text: "LEN " + root.len + " · LAST HIGH SCORE " + root.best
           color: Color.menu.text.toString()
           font.family: Style.font.menuFamily
           font.pixelSize: Style.font.title
