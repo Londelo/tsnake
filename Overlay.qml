@@ -193,10 +193,16 @@ Item {
   }
 
   readonly property bool menuUp: root.opened && (root.alive === 0 || root.paused === 1)
-  // The card is up while a real engine is talking and the run has not begun. The
-  // gotFrame term matters: before the first frame `started` is 0 by default, and a
-  // card over a blank board with a broken engine underneath would be a lie.
-  readonly property bool setupUp: root.opened && root.gotFrame && root.started === 0
+  // The card is up the moment the window is, NOT the moment the first frame arrives.
+  // The gotFrame term used to gate this, and it was the startup latency Brodie saw: the
+  // window appeared over an empty board, sat there while the engine was forked, ncurses
+  // came up and the first tick landed, and only THEN did the card pop in — a two-beat
+  // "weird, then the game starts". It is not a gamble to drop it: `started` is reset to 0
+  // by startEngine() before the fork, and an engine under --protocol always begins
+  // unstarted (protocol_run), so the card is the engine's own answer one instant early
+  // rather than an opinion. What keeps it honest is engineFailed — an engine that never
+  // shows is still caught by the watchdog and the card makes way for the error panel.
+  readonly property bool setupUp: root.opened && root.started === 0
                                  && root.alive === 1 && !root.engineFailed
 
   // --------------------------------------------------- exactly one cell map
