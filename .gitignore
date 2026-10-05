@@ -4,3 +4,10 @@ test_hunt
 test_game
 *.o
 .tsnake_highscore
+.tsnake_setup
+# The overlay's face keeps its two files and its engine INSIDE the plugin folder, so that
+# `omarchy plugin remove` erases the whole footprint. When the card is loaded straight from
+# this checkout that means they land here (the engine binary `snake`, already ignored above),
+# and they are player history, not source.
+/highscore
+/setup
