@@ -11,7 +11,7 @@ Owner key: `me` = Claude, `qml` = qml-plugin subagent, `ut` = unittests subagent
 | 1 | De-mirror the lifted test ban in `omarchy-plugin-plan.md` | me | [x] |
 | 2 | Verify Omarchy/quickshell environment on this box | me | [x] Quickshell 0.3.1, refs present, plugins dir empty, no `qmllint` on PATH, **no `omarchy-shell` running** |
 | 3 | `snake --protocol`: NDJSON frame emit + command read, self-ticking | me | [x] |
-| 4 | `snake --state <path>`: engine-owned file, hardened read, flush-only writes | me | [x] verified by hand: nothing on disk while live, one write after close; symlink read+write refused with target intact; garbage file ignored; nested dirs created |
+| 4 | `snake --state <path>`: engine-owned file, hardened read, writes | me | [x] symlink read+write refused with the target intact, garbage file ignored, nested dirs created — all still true. **Partly superseded by row 60:** "nothing on disk while live, one write after close" was recorded as a feature and turned out to be the lost-best bug |
 | 5 | `--square-cells`: 2-cell aspect stride becomes a renderer-side option | me | [x] `stride_len_for()` is the single decider, shared by `game_step` and `hunt_stride_free` |
 | 6 | `make` warning-free under `-Wall -Wextra` (both targets) | me | [x] engine commit; re-check after the agents land |
 | 7 | Unit tests for the mechanics behind the ncurses seam | ut | [x] **1853 checks, 0 failures**, 28/28 suites, exit 0, warning-free, repeat runs byte-identical. All 22 initial failures were rig bugs; `snake.c` was never touched. Independently mutation-tested by me: no `O_NOFOLLOW` → 2 failures, `ensure_food` neutered → 12, wrap disabled → 14 |
@@ -19,7 +19,7 @@ Owner key: `me` = Claude, `qml` = qml-plugin subagent, `ut` = unittests subagent
 | 9 | `Overlay.qml`: PanelWindow/Overlay layer, exclusive focus, raw `Keys.onPressed`, board | qml | [x] 780 lines; qmllint exit 0, no silencing comments, its warning categories reproduce on first-party `Emojis.qml` |
 | 10 | `BarWidget.qml`: bar button that toggles the overlay | qml | [x] 36 lines, shaped from `plugins/menu/BarWidget.qml:1-24` |
 | 11 | Engine lifecycle: start on `open()`, kill on `close()`/`dismiss()`/`onDestruction` | qml | [x] candidate list, `launchPending` + 1500 ms watchdog, 600 ms grace then SIGTERM backstop |
-| 12 | Save data: read at `open()`, flush only after the overlay is closed | qml + me | [x] `opened = false` precedes `stopEngine()` in both paths; flush→quit→kill. State at `$HOME/.local/state/tsnake/highscore`, engine binary outside the plugins dir — the inotify trap is designed out, not trusted |
+| 12 | Save data: read at `open()`, flushed after the overlay closes | qml + me | [x] `opened = false` precedes `stopEngine()` in both paths; flush→quit→kill. State at `$HOME/.local/state/tsnake/highscore`, engine binary outside the plugins dir — the inotify trap is designed out, not trusted. Since row 60 the flush is a formality: the record is already on disk from the tick that beat it, so a teardown that never happens can no longer lose it |
 | 13 | Plugin install into `~/.config/omarchy/plugins/` + `omarchy plugin validate` + `qmllint` | me | [x] installed at `~/.config/omarchy/plugins/io.github.londelo.tsnake` + engine at `~/.local/state/tsnake/snake`; validator exit 0 on the installed folder; installed binary proven to stream frames and flush on quit |
 | 14 | Human play-test: does it feel like the terminal game | Brodie | [ ] **the only thing left.** Needs a login session with `omarchy-shell` up; never yet run under Quickshell |
 | 15 | README: install, removal, keybind line (local-facing only) | qml | [x] append-only: 84 insertions, 0 deletions |
@@ -57,10 +57,11 @@ Invariant reminders the build must not break:
   the WHOLE stride, both cells, including when `--square-cells` makes it one
 - the board is never empty of tokens (`ensure_food`)
 - only walls kill; a self bite wounds
-- the engine is the only writer of the state file, and it writes only while the overlay
-  is closed. The state file now lives at `$HOME/.local/state/tsnake/highscore`, outside
-  the inotify-watched plugins dir, so a stray write can no longer trigger a reload by
-  itself — but a save during play would still reset the panel under the player
+- the engine is the only writer of the saved files, and the record is written the moment
+  it is beaten, not at teardown — an ending that never reaches `flush` must still keep it.
+  Both files live at `$HOME/.local/state/tsnake/{highscore,setup}`, outside the
+  inotify-watched plugins dir, so no write of theirs can reload the panel under the
+  player; nothing is ever written under `~/.config/omarchy/plugins`
 
 ## Stage 1b — visual polish, from live screenshots (Brodie's play-test, 2026-10-03)
 
@@ -240,3 +241,49 @@ debugging advanced `~/.local/state/tsnake/highscore` from 3 to 4, and `omarchy-r
 run once. A trap for whoever debugs the overlay next: a hidden panel kills its `Process`, so a
 stale window keeps painting the *previous* engine's last frame while `ps` shows a live-looking
 process — hide first, confirm the engine died, then summon.
+
+## Stage 1b — saved data: where it lives, the lost best, and the settings that must come back
+
+Asked 2026-10-05: (a) how/where is data saved, (b) a new best does not survive quitting, (c) the
+setup card's settings should come back next time.
+
+| # | Item | Who | Status |
+|---|---|---|---|
+| 58 | Answer "where is the data", with paths proven on disk | me | [x] see the status block below |
+| 59 | Reproduce the lost best before touching anything | me | [x] `--protocol` banks the run in RAM and writes only at `flush`/`quit`/EOF/SIGTERM. Four of five endings wrote the file; **`kill -9` and an engine that is simply never told to stop wrote NOTHING** while its own frame reported `best:12` — that is Brodie's symptom |
+| 60 | Fix: write the best when it is BEATEN, not when the panel closes | me | [x] watcher scope proven from the host source (`inotifywait -m -r` over `~/.config/omarchy/plugins` only — `PluginRegistry.qml:663`, `pluginsDir` `:11`), so the bank-only rule was protecting nothing. Re-ran the five-ending repro against the installed binary: `quit term eof kill9 idle` all now leave `file=11`; the two that failed wrote `-none-` before |
+| 61 | Persist the card: WRAP + SPEED saved, loaded at startup | me | [x] `setup_file_path()/load_setup()/save_setup()` in the engine, `"<wrap> <tick_ms>\n"` beside the high score, loaded in `protocol_run` and in the terminal `main` before the first frame. Round-trip proven over argv: no file → `wrap":0 speed":55`; saved `1 30` → first frame `wrap":1 speed":30` with no commands sent; a speed-only edit saved `1 25` keeping wrap; `ms:99999` persisted as the clamp `200`; a poisoned `7 400000` fell back to defaults |
+| 62 | Overlay passes `--setup`; nothing is written inside the plugin folder | me | [x] `setupFile` next to `stateFile`, both handed to the engine on argv; QML writes neither file. Engine + overlay installed and `diff -q`-verified |
+| 63 | Unit cases for the save + setup paths (built, not run) | me | [x] built warning-free; `test_save_data_discipline`'s protocol half deliberately INVERTED (it used to assert nothing is on disk while live — that assertion was the bug), new `test_setup_persists` covers round-trip, defaults, per-field guards, junk/empty/oversized/symlink refusal, the clamp-on-save, refused post-START edits, and `restart` keeping the setup. Not run: Brodie hasn't asked |
+| 64 | Brodie plays it: beat a record, close the panel however, summon, is BEST still there | Brodie | [ ] |
+
+### Row 58, the answer: where the data actually lives
+
+`stat`ed on 2026-10-05, not inferred from the source. Two files, both plain text, both
+written by the engine and by nothing else — `Overlay.qml` only names the paths on argv
+(`--state`, `--setup`) and never opens either file; there is no QML `Storage`/`Settings`
+anywhere in the plugin.
+
+| What | Overlay path | Terminal path | Format |
+|---|---|---|---|
+| best length ever | `$HOME/.local/state/tsnake/highscore` | `$HOME/.tsnake_highscore` (cwd if `HOME` unset) | `"<n>\n"` |
+| the setup card | `$HOME/.local/state/tsnake/setup` | `$HOME/.tsnake_setup` | `"<wrap> <tick_ms>\n"` |
+| the engine the panel execs | `$HOME/.local/state/tsnake/snake` | the repo's `./snake` | binary |
+
+At the time of writing: `highscore` = `4` (0600, 2 b), `~/.tsnake_highscore` = `379`
+(0640-ish 4 b), `setup` did not exist yet — it appears the first time a WRAP toggle or a
+dial release is accepted.
+
+Three things that fall out of this table and are worth saying before Brodie reads a
+number as missing:
+
+1. **The two faces keep SEPARATE records.** 379 in the terminal, 4 in the overlay. Open
+   the other face and its best looks lost. Merging them was not asked for and is not
+   free (one would have to adopt the other's path), so it stays a question, not a change.
+2. **`~/.config/omarchy/plugins` is never written to.** It is watched by the host's
+   `inotifywait -m -r -q -e close_write,create,delete,move` (`PluginRegistry.qml:663`,
+   `pluginsDir` at `:11`) and any change reloads the panel; that is the whole reason the
+   state root is `~/.local/state` and not the plugin folder.
+3. **Nothing else is persisted on purpose**: the snake's position, the food, hunt, and
+   the paused flag all die with the process. Hunt stays unpersisted deliberately — a
+   snake that auto-pilots the instant a window appears looks like a broken game.
