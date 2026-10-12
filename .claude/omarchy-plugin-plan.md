@@ -177,7 +177,8 @@ edits need `omarchy restart shell`, and JS changes also need
 Develop with `keepLoaded` **off** and turn it on at the end (it keeps the layer-shell
 window mounted between summons).
 
-**Keybind:** no plugin can install one. It goes in the README for the user to add to
+**Keybind:** no plugin can install one. It goes in `docs/decisions.md` (there is no
+README any more) for the user to add to
 `~/.config/hypr/bindings.lua`, e.g.
 `o.bind("SUPER + CTRL + ALT + N", "Snake", "omarchy-shell shell toggle io.github.londelo.tsnake '{}'")`,
 checking first with `omarchy menu keybindings --print`.
@@ -272,8 +273,9 @@ sever-and-fade self-bite, click-to-place/toggle food, or the BFS auto-hunt AI.
 5. Engine lifecycle: start on `open()`, kill on `close()`/`dismiss()`/
    `Component.onDestruction`.
 6. Save data: flush-on-close only; read at `open()`.
-7. Play it. Then flip `keepLoaded: true`, add `preview.png`, write the README
-   (install + removal + the keybind line), then talk marketplace.
+7. Play it. Then flip `keepLoaded: true`, add `preview.png`, write the docs (the
+   `docs/` pair now carries install + removal + the keybind line — there is no
+   README any more), then talk marketplace.
 
 ## Still open / unverified
 

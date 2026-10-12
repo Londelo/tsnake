@@ -1,8 +1,6 @@
-/*
- * tsnake — terminal snake in C + ncurses
- *
- * Build: make   Run: ./snake   Quit: q
- */
+/* tsnake — terminal snake in C + ncurses. Build: make   Run: ./snake   Quit: q.
+   Full decision histories live in docs/decisions.md; the stdin/stdout codec
+   contract for --protocol is in docs/protocol.md. */
 
 #define _POSIX_C_SOURCE 200809L
 
@@ -28,36 +26,31 @@
 #define FLASH_TICKS 10    /* ticks the border stays green after eating (~0.5s) */
 #define WOUND_FADE 55     /* ticks a severed cell stays red before vanishing (~3s) */
 
-/* Game speed: ONE constant tick per run. Speed deliberately does NOT scale with
-   progress — tying it to the old score made the snake feel faster as it grew, and
-   that read as a bug. TICK_MS is only the DEFAULT: the player picks the run's tick
-   on the setup card (protocol `speed`) and it never moves again mid-run. */
-#define TICK_MS 55
-#define MIN_TICK_MS 20      /* ~2.75x; below this the BFS/pipe can't keep up honestly */
-#define MAX_TICK_MS 200     /* ~0.28x; above this it reads as a frozen game */
+/* Speed is constant for a run: 55ms reads as a reaction, anything under 40ms
+   reads as a slot machine. NEVER scale it with progress. */
+#define TICK_MS 55        /* the DEFAULT only — the setup card's `speed` picks the run's tick */
+#define MIN_TICK_MS 20    /* below this the BFS/pipe can't keep up honestly */
+#define MAX_TICK_MS 200   /* above this it reads as a frozen game */
 
-/* board size is derived from the terminal on startup and on SIGWINCH */
+/* board size comes from the terminal (COLS/LINES) at startup and on SIGWINCH */
 static int BOARD_W = 40;
 static int BOARD_H = 20;
 
 /* ---- what the renderer asked for (argv; see main) ----
-   The Omarchy overlay drives this same engine over a pipe instead of owning a
-   terminal, so the three things a curses terminal used to decide implicitly
-   become explicit options. They are globals for the same reason BOARD_W is one:
-   the rules need them, and the headless harness sets them directly. */
+   The overlay drives this same engine over a pipe, so what a curses terminal
+   decided implicitly becomes explicit flags. */
 static int protocol_mode = 0;   /* NDJSON over stdin/stdout, no curses at all */
 static int square_cells = 0;    /* --square-cells: cells are square, so no 2:1
                                    aspect compensation (see stride_len_for) */
 static char state_path[512];    /* --state: the best-length file, engine-owned */
 static char setup_path[512];    /* --setup: the saved setup (wrap + tick_ms), engine-owned */
-static int save_on_beat = 1;    /* write the record the instant it is beaten (the curses
-                                   face always does). protocol_run clears it: the overlay's
-                                   files live INSIDE the plugin folder, which the shell
-                                   watches, so a write is a panel reload — see save_highscore */
 static int best_len;            /* the record AS IT STANDS ON DISK — frames report this one,
                                    so it never runs ahead of the file (see save_highscore) */
-static int pending_best;        /* banked since the last flush, not yet on disk: THIS run's
-                                   best, including one that has not been saved yet */
+static int pending_best;        /* the best THIS run has reached, beaten the file or not. It
+                                   is no longer how a save gets written — that happens the
+                                   instant the number is beaten — it is what the terminators
+                                   still have to hand to the file if they ever run
+                                   (see terminate_handler) */
 
 /* Layout: row 0 = header, rows 1..BOARD_H+2 = bordered play field,
    the cell (x, y) is drawn at screen row y+CELL_TOP, screen col x+CELL_LEFT
@@ -138,20 +131,10 @@ static int rng(int limit) {
     return rand() % limit;
 }
 
-/* $HOME/.tsnake_highscore (the cwd if HOME is unset), or whatever --state named.
-   The overlay names a file INSIDE its own plugin folder, so that `omarchy plugin
-   remove` — which only ever touches $PLUGINS_DIR/$id (bin/omarchy-plugin-remove:10,:71)
-   — takes the record with it and leaves no tsnake anywhere on the machine. That is a
-   deliberate reversal: the state used to live under $HOME/.local/state precisely to get
-   it OUT of that folder, because the shell runs `inotifywait -m -r -q -e
-   close_write,create,delete,move` over the plugins dir (services/PluginRegistry.qml:663,
-   pluginsDir at :11) and reloads every panel on any hit to a NON-hidden path
-   (localPluginIdForPath skips a leading ".", :735; shell.qml:1476 → reloadPlugins).
-   Living in the watched folder is exactly what makes the timing of a save a rule and not
-   a preference — the whole argument is at save_highscore.
-   The terminal and the overlay still keep SEPARATE records: different files, the same
-   meaning. The engine is each file's ONLY writer — a second writer would be a second
-   set of rules about what the best length means. */
+/* Either the terminal's $HOME/.tsnake_highscore (cwd if HOME is unset) or whatever
+   --state names — the overlay names $XDG_STATE_HOME/tsnake/highscore. NEVER name a file
+   inside the watched plugins folder, and never let anything but the engine write these:
+   one writer, or the record's meaning forks. Full story: docs/decisions.md. */
 static const char *highscore_path(void) {
     static char path[512];
     if (state_path[0]) return state_path;
@@ -163,11 +146,9 @@ static const char *highscore_path(void) {
     return path;
 }
 
-/* The state file is read by a long-lived shared shell process, in a directory
-   other plugins can also write to, so it only counts as state when it is a
-   plain regular file of a sane size: lstat and not stat, so a symlink is
-   refused rather than followed, and a size cap, so a corrupted or planted file
-   cannot turn one fscanf into a read of something else. */
+/* The state dir can be world-writable, so a file counts as state only when lstat says
+   plain regular file under 32 bytes — lstat and not stat, so a planted symlink is
+   refused, never followed. Guards the read exactly as O_NOFOLLOW guards the write. */
 static int state_file_trustworthy(const char *path) {
     struct stat st;
     if (lstat(path, &st) != 0) return 0;
@@ -175,8 +156,8 @@ static int state_file_trustworthy(const char *path) {
     return st.st_size > 0 && st.st_size <= 32;
 }
 
-/* mkdir -p over the state file's parent, so --state can name a folder
-   (.local/) that a fresh plugin checkout does not have yet. */
+/* mkdir -p over the state file's parent, so --state can name a folder that
+   does not exist yet. */
 static int ensure_parent_dir(const char *path) {
     char dir[512];
     size_t n = 0;
@@ -186,11 +167,9 @@ static int ensure_parent_dir(const char *path) {
     if (!slash) return 1;                 /* a bare filename: nothing to build */
     *slash = 0;
     if (dir[0] == 0) return 1;            /* "/file" — / is already there */
-    /* Step the NUL along one path component at a time and mkdir each prefix, so
-       a nested --state directory works. `held == 0` is the stop condition and it
-       has to be checked AFTER restoring: without it the walk sails past the end
-       of the buffer writing zeros across the stack, which is a segfault on the
-       first ever save, not a cosmetic one. */
+    /* Step the NUL along one component at a time and mkdir each prefix. The `held == 0`
+       stop is checked AFTER restoring the byte — checked before, the walk runs off the
+       end of the buffer: a segfault on the first ever save, not a cosmetic bug. */
     for (char *p = dir + 1; ; p++) {
         if (*p != '/' && *p != 0) continue;
         char held = *p;
@@ -220,9 +199,8 @@ static void write_best_file(int length) {
     if (length <= best) return;
     const char *path = highscore_path();
     if (!ensure_parent_dir(path)) return;
-    /* O_NOFOLLOW on the write for the same reason lstat guards the read: the
-       overlay's state file sits in a directory other code can plant a symlink
-       in, and a save must never become a write to whatever that link points at. */
+    /* O_NOFOLLOW: the state dir is world-writable; a save must never become a
+       write to whatever a planted symlink points at. */
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
     FILE *f = fd < 0 ? NULL : fdopen(fd, "w");
     if (f) {
@@ -233,65 +211,37 @@ static void write_best_file(int length) {
     }
 }
 
-/* Two policies, decided by save_on_beat, because the two faces keep their files in
-   two different places — and where the file is decides when it may be written.
-
-   The curses face ($HOME/.tsnake_highscore, nobody watches $HOME) writes the moment
-   the number is beaten. Nothing can go wrong with that, and a number that is only in
-   RAM is a number you can lose.
-
-   The overlay's face BANKS and writes at the end of the run. Its files live INSIDE the
-   plugin folder, which is what makes uninstalling take the player's history with it —
-   and the shell watches that folder (`inotifywait -m -r -q -e
-   close_write,create,delete,move`, PluginRegistry.qml:663) and reloads every plugin on
-   any change to a NON-hidden path (localPluginIdForPath ignores a leading ".",
-   :735; shell.qml:1476 → a 150 ms timer → reloadPlugins). So a write during play is a
-   panel reload during play: the game dies under the player because they ate something.
-   The bank is therefore flushed at every ending that can be caught — `flush`, `quit`,
-   stdin EOF, and SIGTERM/SIGHUP/SIGINT through terminate_handler(), which writes with
-   bare open()/write() and never touches curses or the heap. SIGKILL is the one ending
-   that still loses a record: the shell would have to promise not to use it, and it
-   doesn't. That is the price of living in the watched folder, paid deliberately. */
+/* THE ONE RULE ABOUT A RECORD: it hits disk the instant it is beaten, never at
+   teardown. A save that depends on being asked is not a save — banking in RAM
+   until `flush` was the lost-high-score bug (docs/decisions.md). `flush`/`quit`
+   and terminate_handler are redundancy, never the only way a number gets saved. */
 static void save_highscore(int length) {
-    int beat_it = length > best_len;
-    /* best_len is what frames report, so it is the record as it STANDS ON DISK and never
-       runs ahead of the file. The curses face can raise it in the same breath as it
-       writes, because the two are the same instant. The overlay's face must not: with the
-       bank still open the file still says last run, and a card that printed a number the
-       file has never held is the lie the HUD's "LAST HIGH SCORE" exists to avoid. The
-       run's own number is pending_best, and it lands whole at the flush. */
-    if (beat_it && save_on_beat) best_len = length;
+    /* Frames report best_len — the record AS IT STANDS ON DISK — so it rises in the
+       same breath as the write; the two are the same instant. */
     if (length > pending_best) pending_best = length;
-    if (beat_it && save_on_beat) write_best_file(length);
+    if (length > best_len) {
+        best_len = length;
+        write_best_file(length);
+    }
 }
 
-/* The overlay's save. Under --protocol this is not a backstop, it IS the write: both
-   files are banked for the whole run and land here, once, when the run ends — asked for
-   by `flush` and `quit`, and by the signal handler's own copy of the same two writes.
-   The terminal build reaches it too (and has nothing in the bank to do), so one call
-   site covers both faces. */
+/* Redundancy, both faces, every exit path: normally nothing left to write — the
+   write-through rule already did it. A client that asks gets a guarantee, not a hope. */
 static void flush_setup(void);           /* defined with the setup card below */
 
 static void flush_state(void) {
     if (pending_best > 0) write_best_file(pending_best);
     pending_best = 0;
-    flush_setup();                       /* one burst at the end of the run, not one per edit */
+    flush_setup();                       /* normally a no-op: the write-through rule already wrote */
 }
 
 /* ---- the setup card, persisted ----------------------------------------
-   The card is two decisions: does the wall kill, how fast does the snake go. They are
-   saved as two integers (`wrap tick_ms`, one line) beside the high score, in the same
-   directory, for the same reason and with the same hardening. Loaded BEFORE START, so
-   the card paints the restored answer out of real frames — the QML keeps no opinion of
-   its own and needs no storage of its own: one source of truth, the engine.
-
-   The curses face writes each change as it happens. The overlay BANKS it (that's what
-   `pending_setup_ms` is for: -1 means "nothing waiting", which is why 0 can't double as
-   the sentinel — 0 is not a legal tick_ms, but being explicit costs nothing) and writes
-   at the end of the run with the record, because in the plugin folder a write is a
-   panel reload. Both writer call sites are the two setup commands, which the engine
-   already refuses once the run has begun, so even the immediate form could only ever
-   fire while the card was up — and the card is exactly when a reload would be felt. */
+   `wrap tick_ms`, one line, same directory and same hardening as the record. Loaded
+   BEFORE START, so the card paints engine truth on frame one — QML keeps no opinion
+   and needs no storage: one source of truth, the engine. Written on every accepted
+   change, same write-through rule as the record. `pending_setup_ms` is -1 until
+   something was set (0 is a legal tick_ms, so it can't be the sentinel) — pure
+   redundancy for the terminators. */
 static int pending_setup_ms = -1;        /* -1: nothing waiting; else the ms to write */
 static int pending_setup_wrap;
 static const char *setup_file_path(void) {
@@ -305,10 +255,9 @@ static const char *setup_file_path(void) {
     return path;
 }
 
-/* Two integers, or nothing at all: an unreadable, planted, oversized, symlinked or
-   half-written file leaves the defaults standing rather than handing the game a
-   frozen tick or a busy-spinning one. No `best` in here — that file is the record's
-   only home, and a second copy of it would be a second opinion. */
+/* Two integers, or nothing at all: junk in the file leaves the defaults standing
+   rather than handing the game a frozen tick or a busy-spinning one. No `best` in
+   here — one file per fact, and this is not the record's home. */
 static void load_setup(int *wrap, int *tick_ms) {
     *wrap = 0;
     *tick_ms = TICK_MS;
@@ -327,8 +276,7 @@ static void load_setup(int *wrap, int *tick_ms) {
 static void setup_write(int wrap, int tick_ms) {
     const char *path = setup_file_path();
     if (!ensure_parent_dir(path)) return;
-    /* O_NOFOLLOW for the same reason lstat guards the read: the directory is one other
-       code can write into, and a save must never become a write to a planted target. */
+    /* O_NOFOLLOW: same reason as the record — never a write into a planted target. */
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
     FILE *f = fd < 0 ? NULL : fdopen(fd, "w");
     if (f) {
@@ -340,35 +288,26 @@ static void setup_write(int wrap, int tick_ms) {
 }
 
 static void save_setup(int wrap, int tick_ms) {
-    if (save_on_beat) {                    /* curses face: nothing watches $HOME */
-        setup_write(wrap, tick_ms);
-        pending_setup_ms = -1;
-        return;
-    }
-    pending_setup_wrap = wrap;             /* overlay: bank it, write it at the end */
+    setup_write(wrap, tick_ms);            /* the instant the card changes, not when it closes */
+    pending_setup_wrap = wrap;             /* a copy where a terminator can still find it */
     pending_setup_ms = tick_ms;
 }
 
+/* Re-entrant on purpose: the bank is never spent, so EVERY ask (mid-run `flush`
+   included, and `quit` after a `flush`) re-writes the last accepted pair. A
+   spend-once bank was the lost-high-score bug's other half — the file can be
+   gone by the time the terminator asks (scratch cleanup, an erased state root),
+   and a guarantee that only works the first time is not one. */
 static void flush_setup(void) {
     if (pending_setup_ms < 0) return;
     setup_write(pending_setup_wrap, pending_setup_ms);
-    pending_setup_ms = -1;
 }
 
-/* The shell can take the overlay's Loader down without asking: a plugin reload,
-   a bar-config change, a logout. Quickshell's Process destructor then SIGTERMs
-   the child, which with the default disposition dies with the banked best still
-   in RAM — and the overlay's own quit may still be sitting unread in the pipe
-   buffer, because a process blocked in poll() never gets to it. Losing a run
-   that way is indistinguishable from the feature never working, so the
-   terminators write the file themselves, with async-signal-safe calls only:
-   open/write/mkdir/close and the digits laid out by hand. No stdio, no malloc,
-   no load_highscore — none of those are safe to call from a handler.
-   Installed in protocol mode only; the terminal build writes as it plays, so it
-   keeps nothing in RAM that a signal could strand. */
+/* Backstop only (see save_highscore — never again the only copy). Async-signal-safe
+   calls only: open/write/mkdir/close, digits laid out by hand. No stdio, no malloc,
+   no load_highscore. Protocol mode only: the terminal build has no pipe to die on. */
 /* best-effort parent creation, mkdir() alone: the first save of a dying process must
-   still land if the overlay's directory is missing. Split out because BOTH saved files
-   are written here, and a hand-rolled path walk duplicated twice is a bug waiting. */
+   still land if the directory is missing. Shared by both saved files. */
 static void raw_ensure_parent(const char *path) {
     char dir[512];
     int i = 0;
@@ -417,9 +356,9 @@ static void terminate_handler(int sig) {
         buf[m++] = '\n';
         raw_write(highscore_path(), buf, m);
     }
-    /* The setup is banked exactly like the record now, so it gets the same treatment:
-       a panel the shell tore down must not come back forgetting the wall and the dial
-       the player set on the card ten seconds ago. */
+    /* The card's two answers get the same treatment as the record: a panel the
+       shell tore down must not come back forgetting the wall and the dial. By
+       arrival they are already on disk — this is the second copy, not the first. */
     if (pending_setup_ms >= 0) {
         char buf[24];
         int m = raw_int(buf, pending_setup_wrap);
@@ -437,9 +376,8 @@ static void snake_init(Snake *s) {
     s->wound_len = 0;
 }
 
-/* The ring head, and the live body length, both counted in ring cells
-   BEHIND the head. The body never rewrites its own cells, so a step can
-   always be read straight back down the ring. */
+/* Ring head + live length, counted in ring cells BEHIND the head; the body never
+   rewrites its own cells, so a step reads back straight down the ring. */
 static void snake_push(Snake *s, Point p) {
     s->head = (s->head + 1) % MAX_SNAKE;
     s->cells[s->head] = p;
@@ -451,10 +389,8 @@ static void snake_pop_tail(Snake *s) {
     if (s->len > 0) s->len--;
 }
 
-/* How far back from the head does the live body run? 0 is the head itself,
-   len-1 is the tail tip. -1 means p is not part of the live body at all —
-   which includes every cell the body has ever shed, since the ring cells
-   holding those positions no longer belong to it. */
+/* Chain depth: 0 is the head, len-1 the tail tip. -1 = not live body — which
+   includes every cell the body ever shed: the ring no longer holds those. */
 static int snake_chain_depth(const Snake *s, Point p) {
     for (int i = 0; i < s->len; i++) {
         int idx = (s->head - i + MAX_SNAKE * 2) % MAX_SNAKE;
@@ -482,11 +418,8 @@ static int snake_occupied(const Game *g, Point p) {
     return snake_contains(&g->snake, p) || snake_wound_contains(&g->snake, p);
 }
 
-/* A self bite severs the cell at chain depth `depth` and every cell from
-   there toward the tail tip, so the live body stops at the bite and the
-   length on screen is the live snake from this tick onward. The severed
-   positions are copied out of the ring first: shortening the body is what
-   stops the ring from holding them (see WoundCell). */
+/* Sever the bitten cell and everything toward the tail tip (len = depth). The
+   positions are copied OUT of the ring first — see WoundCell. */
 static void snake_bite(Snake *s, int depth) {
     if (depth < 0 || depth >= s->len) return;
     int n = s->len - depth;
@@ -495,10 +428,8 @@ static void snake_bite(Snake *s, int depth) {
     for (int i = 0; i < n; i++) {
         int idx = (s->head - (depth + i) + MAX_SNAKE * 2) % MAX_SNAKE;
         s->wound[s->wound_len].p = s->cells[idx];
-        /* The bitten cell dies first and the tail tip last, so the red runs
-           away from the bite rather than the whole chunk ending on one tick.
-           The spread stays inside WOUND_FADE: however big the chunk is, the
-           board is clean again within a few seconds of the bite. */
+        /* Staggered ttl: the bitten cell dies first, the tail tip last, and the
+           whole spread stays inside WOUND_FADE. */
         s->wound[s->wound_len].ttl =
             WOUND_FADE / 2 + (WOUND_FADE / 2) * i / (n > 1 ? n - 1 : 1);
         s->wound_len++;
@@ -506,10 +437,8 @@ static void snake_bite(Snake *s, int depth) {
     s->len = depth;
 }
 
-/* one tick of bleeding. The queue drains from the front, which is always the
-   oldest bite; a cell that expires in the middle of the queue (possible once
-   a second bite lands behind the first) is harmless, since every reader
-   checks ttl before trusting a cell. */
+/* One tick of bleeding. The queue drains from the front (the oldest bite); a cell
+   expiring mid-queue is harmless — every reader checks ttl before trusting a cell. */
 static void wound_tick(Snake *s) {
     for (int i = 0; i < s->wound_len; i++) s->wound[i].ttl--;
     int gone = 0;
@@ -527,8 +456,9 @@ static int food_index_at(const Game *g, Point p) {
     return -1;
 }
 
-/* is a DIFFERENT token already sitting on p? slot i's own cell does not
-   count, since that is the one being re-rolled */
+/* Is a DIFFERENT token on p? Slot i's own cell does not count — it is the one
+   being re-rolled. Test THIS, never `food_index_at(...) != i`: an empty cell reads
+   -1, which is != i, so that check rejects every legal cell. */
 static int other_token_at(const Game *g, Point p, int i) {
     for (int j = 0; j < g->food_n; j++)
         if (j != i && g->food[j].p.x == p.x && g->food[j].p.y == p.y) return 1;
@@ -543,34 +473,26 @@ static void remove_food(Game *g, int i) {
 }
 
 static void spawn_food(Game *g, int i) {
-    /* Re-roll until the token lands clear of the snake and of every other
-       token. The test has to ask "is something else already here" rather than
-       "food_index_at != i": an empty cell reads as -1, which is != i, so that
-       version rejects every legal cell and escapes only by re-rolling onto the
-       token's own old position — which, right after an eat, is under the head,
-       so the loop never ends and the game hangs where it looks like it froze.
-       The cap is the same kind of guard the BFS uses: a board packed solid has
-       no legal cell to offer, and a bounded spin beats a frozen terminal. */
+    /* Re-roll until clear of the snake and of every other token. A naive
+       `food_index_at != i` test rejects EVERY legal cell (empty reads -1) and only
+       escapes by re-rolling under the head — an endless loop that reads as a
+       frozen game. The 1000-roll cap is for the same reason: a packed board has no
+       legal cell, and a bounded spin beats a frozen terminal. */
     for (int guard = 0; guard < 1000; guard++) {
         g->food[i].p.x = rng(BOARD_W);
         g->food[i].p.y = rng(BOARD_H);
-        /* the `placed` flag rides along: this re-rolls where a token sits, never
-           what kind of token it is. "Clear of every other token" also means a
-           random respawn can never stack on top of one the player clicked in. */
+        /* `placed` rides along: this moves where a token sits, never what kind it
+           is — so a respawn can never stack on one the player clicked in. */
         if (!snake_occupied(g, g->food[i].p) && !other_token_at(g, g->food[i].p, i))
             return;
     }
 }
 
-/* The board is never left empty of tokens. Food is the only way to grow, so a
-   board with none on it is a dead game — and the auto-hunt AI, whose entire
-   plan is a distance field seeded FROM the tokens, then has nothing to steer
-   by: no seeds means every cell reads "no path", and the snake walks straight
-   forever (see hunt_step).
-   Tokens leave play in exactly two ways — the player clicks one away, or the
-   snake eats the last of the ones it clicked in — and both call this after it
-   happens. What comes back is one of the GAME's tokens (placed = 0), so it
-   respawns in turn rather than being spent. */
+/* THE BOARD IS NEVER EMPTY OF TOKENS. Food is the only way to grow, and the hunt
+   AI's whole plan is a distance field seeded FROM the tokens — an empty board is a
+   dead game twice over. Every token-removing path (click-remove, eat-the-last,
+   shrink-drop) calls this right after, and what comes back is a GAME token
+   (placed = 0), so it respawns in turn. */
 static void ensure_food(Game *g) {
     if (g->food_n > 0) return;
     g->food[0].placed = 0;
@@ -590,8 +512,7 @@ static void game_init(Game *g) {
     g->dir[0] = 1; g->dir[1] = 0;
     g->alive = 1;
     /* A game is startable the moment it exists — EXCEPT under --protocol, where
-       protocol_run() drops started back to 0 so the overlay can put up its setup
-       card first. The curses face never sees started == 0. */
+       protocol_run() drops started to 0 so the setup card gets its frame. */
     g->started = 1;
     g->tick_ms = TICK_MS;
 
@@ -621,16 +542,11 @@ static void queue_direction(Game *g, int dx, int dy) {
     }
 }
 
-/* One cell forward. game_step calls this twice per tick for a horizontal
-   move (terminal cells are ~2x taller than wide), checking each cell on its
-   own, so a step only ever has to reason about the single cell it lands on.
-   In wrap mode the seam is a tunnel; otherwise a wall is the ONLY thing that
-   kills — a step onto the snake's own body is a bite, not a death: that cell
-   and every cell from there back toward the tail tip detach, go red where
-   they fall, and the head moves on into the scar they leave.
-   Two landings are never a bite: the tail tip, which is vacated by the very
-   act of stepping, and any cell the body has already shed, which the head is
-   merely flying over — its own past is not in the way. */
+/* One cell forward; game_step calls it once per stride cell (see stride_len_for),
+   each landing checked on its own. Wrap makes the seam a tunnel; otherwise a wall is
+   the ONLY killer. A body landing is a bite, not a death — EXCEPT the vacating
+   tail-tip (depth len-1) and any shed cell, which are legal landings (see
+   snake_chain_depth). */
 static void advance_one(Game *g) {
     Snake *s = &g->snake;
     Point head = s->cells[s->head];
@@ -669,20 +585,15 @@ static void advance_one(Game *g) {
 
 /* ---- auto-hunt: multi-source BFS from all food to the head ---- */
 
-/* Guard rails for the BFS scratch arrays. Beyond these the AI declines to
-   plan at all and the snake simply steers straight, so they have to cover any
-   terminal a person can actually open — a maximized window on a wide monitor
-   goes past 200 columns without trying. */
+/* Guard rails for the BFS scratch arrays. Beyond these the AI declines to plan
+   and the snake steers straight, so they must cover any terminal a person can
+   actually open — a maximized window on a wide monitor passes 200 cols easily. */
 #define MAX_BOARD_W 400
 #define MAX_BOARD_H 250
 
-/* Fills an occupancy grid from the snake — the live body, and any severed
-   cell still bleeding out — so hunt mode can read it in O(1) per cell.
-   Both passes only ever walk the live body and the live corpse, never the
-   whole ring, because hunt mode calls this every single tick.
-   A severed tail counts as solid right up until it fades: until then it is
-   still a wall in the middle of the board, so hunt mode gives it the same
-   wide berth it gives the live body. */
+/* Occupancy grid for hunt mode, O(1) per cell: live body + unexpired corpses
+   (a corpse is a wall until it fades). Walks the live prefix, never the ring,
+   and hunt mode calls it every tick. */
 static void fill_occupancy(Game *g, unsigned char *occ, int w, int h) {
     memset(occ, 0, (size_t)w * h);
     Snake *s = &g->snake;
@@ -701,13 +612,9 @@ static void fill_occupancy(Game *g, unsigned char *occ, int w, int h) {
 static const int HUNT_DX[4] = {1, -1, 0, 0};
 static const int HUNT_DY[4] = {0, 0, 1, -1};
 
-/* Where one step from p along d lands, and whether the snake may be there at
-   all. Wrap has to agree with advance_one here, or the AI would refuse to
-   cross a seam the game is perfectly happy to tunnel through and starve
-   itself waiting for food on the far side of the board.
-   Every stepping the hunt AI does — the BFS wave included — goes through this
-   one function, so the board the AI plans on cannot drift away from the board
-   the snake actually travels. */
+/* Where one step from p along d lands — and IT WRAPS, exactly like advance_one.
+   Every step the AI reasons about (BFS included) goes through here: if the two
+   topologies ever disagree the AI starves on a board the snake could cross. */
 static int hunt_next_cell(Game *g, Point p, int dx, int dy, Point *out) {
     out->x = p.x + dx;
     out->y = p.y + dy;
@@ -719,15 +626,10 @@ static int hunt_next_cell(Game *g, Point p, int dx, int dy, Point *out) {
     return in_bounds(*out);
 }
 
-/* How many cells one tick covers along (dx, dy).
-
-   Terminal cells are ~2x taller than wide, so a horizontal cell per tick looks
-   half the speed of a vertical one and horizontal moves take TWO cells to even
-   out visual speed. A QML grid has square cells and needs no compensation:
-   --square-cells makes every stride one cell. This is the single place that
-   number is decided, because game_step and hunt_stride_free have to agree
-   absolutely — an AI that validates a different stride from the one the snake
-   travels is the bug that pinned auto-hunt to a straight line forever. */
+/* Cells covered per tick: terminal cells are ~2x taller than wide, so a
+   horizontal move takes TWO cells to match vertical speed; --square-cells makes
+   every stride one. THE single place that number is decided — game_step and
+   hunt_stride_free must agree or the AI plans a different stride than it drives. */
 static int stride_len_for(const Game *g, int dx, int dy) {
     (void)g;
     if (square_cells) return 1;
@@ -736,16 +638,9 @@ static int stride_len_for(const Game *g, int dx, int dy) {
     return 2;                      /* horizontal in a terminal: two cells */
 }
 
-/* Is the WHOLE stride from p along (dx, dy) free — of the live body and of any
-   corpse still bleeding out? A horizontal move covers two cells per tick, so
-   the AI has to walk both of them: a direction whose second cell is taken is
-   no escape, it only postpones the crunch by a tick. The head ends the tick on
-   the FAR cell; `first`, when asked for, is the near one — that is the cell the
-   distance field is read at. Pass NULL for a plain yes/no.
-   The loop covers stride_len_for() cells whatever that is: hard-coding "check
-   the second cell when dy == 0" here would silently un-check it for a
-   square-cell renderer whose stride is one, and would be wrong twice over for
-   any future stride length. */
+/* The WHOLE stride, every cell of it, or the answer is not "free": a direction
+   whose second cell is taken only postpones the crash by a tick. `first` (may be
+   NULL) gets the near cell — where the distance field is read. */
 static int hunt_stride_free(Game *g, Point from, int dx, int dy, Point *first) {
     Point c;
     if (!hunt_next_cell(g, from, dx, dy, &c)) return 0;
@@ -759,8 +654,7 @@ static int hunt_stride_free(Game *g, Point from, int dx, int dy, Point *first) {
     return 1;
 }
 
-/* chooses the best direction toward the nearest food; returns 0 if the
-   AI cannot find any legal move */
+/* Best direction toward the nearest food; 0 means "keep going straight". */
 static int hunt_step(Game *g, int out[2]) {
     if (BOARD_W > MAX_BOARD_W || BOARD_H > MAX_BOARD_H) return 0;
     static int dist[MAX_BOARD_H][MAX_BOARD_W];
@@ -774,8 +668,7 @@ static int hunt_step(Game *g, int out[2]) {
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) dist[y][x] = -1;
 
-    /* seed the queue with every food token: BFS then yields distance-to-
-       nearest-token for every reachable cell */
+    /* Seed the queue with every token: BFS then yields distance-to-nearest-token. */
     int qh = 0, qt = 0;
     for (int i = 0; i < g->food_n; i++) {
         Point f = g->food[i].p;
@@ -785,19 +678,12 @@ static int hunt_step(Game *g, int out[2]) {
         qx[qt] = f.x; qy[qt] = f.y; qt++;
     }
 
-    /* The wave spreads via hunt_next_cell, the same step advance_one takes, so
-       in wrap mode it crosses the seam the game tunnels through. Truncating it
-       at the edges instead — clipping nx/ny against the board rather than
-       wrapping them — made the AI plan on a plane while the snake lived on a
-       torus, and that mismatch is fatal rather than merely suboptimal: a body
-       wall running edge to edge, which is just what a long snake looks like,
-       seals the wave off in the plane topology even though the real board has
-       an opening at the seam. Every legal neighbour of the head then reads
-       dist -1 ("no food reachable"), the loop below finds no direction worth
-       taking, and the boxed-in branch falls through to marching straight —
-       which in wrap mode is always legal, so the snake walks a single
-       horizontal line across the screen and through the seam forever, never
-       turning, never eating. */
+    /* The wave spreads through hunt_next_cell, so in wrap mode the wave crosses
+       the seam exactly like the snake does. Clipping the wave at the board edges
+       instead — a plane for the planner, a torus for the driver — is what ended
+       auto-hunt once: an edge-to-edge body wall seals the wave in the PLANE while
+       the real board stays open, every neighbour reads dist -1, and the snake
+       marches straight forever. */
     while (qh < qt) {
         Point cur = { qx[qh], qy[qh] }; qh++;
         for (int d = 0; d < 4; d++) {
@@ -823,13 +709,9 @@ static int hunt_step(Game *g, int out[2]) {
 
     if (best_d >= 0) { out[0] = HUNT_DX[best_d]; out[1] = HUNT_DY[best_d]; return 1; }
 
-    /* Nothing is reachable: stay alive and stay mobile rather than starve in
-       place. Keep straight ONLY when the whole stride is free, else take the
-       first direction whose whole stride is free. Testing a single cell here
-       made "legal" a lie for a horizontal move — the second cell of the stride
-       then ran into the wall (a death) or into its own body — and because the
-       straight case always wins when it is allowed at all, one half-checked
-       cell was enough to pin the AI to that direction indefinitely. */
+    /* Nothing reachable: stay alive and mobile instead of starving in place.
+       Straight counts ONLY as a whole free stride — checking one cell makes
+       "legal" a lie for horizontal moves (see hunt_stride_free). */
     if (hunt_stride_free(g, head, g->dir[0], g->dir[1], NULL)) return 0;
     for (int d = 0; d < 4; d++) {
         int dx = HUNT_DX[d], dy = HUNT_DY[d];
@@ -847,7 +729,7 @@ static void game_step(Game *g) {
     if (g->paused || !g->alive || !g->started) return;
     if (g->flash > 0) g->flash--;
 
-    /* a severed cell is a live thing for WOUND_FADE ticks (see WoundCell) */
+    /* Corpses stay solid until their countdown expires (see wound_tick). */
     wound_tick(s);
 
     if (g->hunt) {
@@ -858,30 +740,26 @@ static void game_step(Game *g) {
     }
 
     if (g->pending_count > 0) {
-        /* a lean that lands on the snake's own body is a bite, not a
-           death: whatever direction it clips (see advance_one) */
+        /* A lean onto the snake's own body is a bite, not a death (advance_one). */
         g->dir[0] = g->pending[g->pending_head][0];
         g->dir[1] = g->pending[g->pending_head][1];
         g->pending_head = (g->pending_head + 1) % INPUT_QUEUE_SIZE;
         g->pending_count--;
     }
 
-    /* Each cell of the stride is landed on and checked on its own (advance_one);
-       how many cells a tick covers is stride_len_for's call, shared with the AI's
-       legality check so the two can never disagree. */
+    /* Each stride cell lands and is checked on its own; stride_len_for is shared
+       with the AI's legality check so planner and driver cannot drift. */
     int steps = stride_len_for(g, g->dir[0], g->dir[1]);
     for (int k = 0; k < steps && g->alive; k++) advance_one(g);
 }
 
-/* The run's tick, chosen on the setup card. Constant for the whole run: this is
-   the one place the delay is read, and nothing here looks at length or score. */
+/* The run's tick, chosen on the card and frozen for the run — never length-scaled. */
 static int tick_delay_ms(const Game *g) {
     return g->tick_ms;
 }
 
-/* floating centered menu for the pause / game-over screens: blanks its
-   rectangle (hiding the board behind it) and shows a titled box. Game
-   state is untouched — this is pure presentation. */
+/* Floating centered menu for pause / game-over: blanks its rect (erasing the
+   board UNDER it is safe — state is untouched) and paints a titled box. */
 static void draw_panel(const char *title, const char *lines[], int nlines) {
     int w = (int)strlen(title) + 8;
     for (int i = 0; i < nlines; i++) {
@@ -917,8 +795,8 @@ static chtype head_glyph(const int dir[2]) {
 static void draw(Game *g, int highscore) {
     erase();
 
-    /* board box occupies rows 1..BOARD_H+2, cols 1..BOARD_W+2. Border
-       priority: a fresh eat flashes green, else auto-hunt burns red-orange */
+    /* Border colour priority: a fresh eat flashes green, else armed hunt burns
+       red-orange. */
     WINDOW *board = derwin(stdscr, BOARD_H + 2, BOARD_W + 2, 1, 1);
     int border_pair = 0;   /* 0 = default */
     if (has_colors()) {
@@ -935,23 +813,19 @@ static void draw(Game *g, int highscore) {
     attroff(A_BOLD);
     printw("  high %d", highscore);
 
-    /* Food, snake and wounds hide while a menu floats over the board — the
-       state is fully preserved underneath, only the pixels go away. They go
-       under one `if`, not an early return: the help row, the floating panels
-       and the refresh() at the bottom of this function still have to run, and
-       bailing out here left the menus unrendered and the screen unflushed. */
+    /* Under ONE if, never an early return: the help row, both panels and the
+       trailing refresh() live below — an early return renders no menu and
+       flushes nothing (the screen just freezes). */
     if (!g->paused && g->alive) {
-        /* cells sit at CELL_TOP/CELL_LEFT: one for the box's origin, one for its
-           border — the same pair the click handler subtracts */
+        /* cells sit at CELL_TOP/CELL_LEFT — the same pair the click handler
+           subtracts; change one, change both. */
         if (has_colors()) attron(COLOR_PAIR(1));
         for (int i = 0; i < g->food_n; i++)
             mvaddch(CELL_TOP + g->food[i].p.y, CELL_LEFT + g->food[i].p.x, '$');
         if (has_colors()) attroff(COLOR_PAIR(1));
 
-        /* The severed tail lies red where it fell until its own countdown runs
-           out. It goes under the live body, so the head moving into the scar it
-           just made still reads as a head, and it dims over its last third so
-           the chunk fades away rather than blinking out on one tick. */
+        /* Corpses draw under the live body (a head in its own scar reads as a
+           head) and dim over their last third. */
         if (has_colors()) attron(COLOR_PAIR(3));
         for (int i = 0; i < g->snake.wound_len; i++) {
             int ttl = g->snake.wound[i].ttl;
@@ -977,9 +851,8 @@ static void draw(Game *g, int highscore) {
     int help_row = BOARD_H + 4;
     if (help_row < LINES) {
         mvprintw(help_row, 2, "arrows move · h auto-hunt · x wrap · p pause · r restart · q quit");
-        /* the mouse hint rides on its OWN row rather than tags onto the keys:
-           the status labels right-align against COLS on this line, and a longer
-           left-hand string would run underneath them */
+        /* Its own row: the right-aligned status labels on the key row would be
+           overrun by a longer left-hand string. */
         if (help_row + 1 < LINES) {
             if (has_colors()) attron(A_DIM);
             mvprintw(help_row + 1, 2,
@@ -1030,8 +903,8 @@ static void setup_colors(void) {
     init_pair(5, COLOR_CYAN, -1);       /* floating menu border */
 }
 
-/* coil the snake back into the board serpentine-style, preserving its
-   length; used when a shrink leaves segments outside the new bounds */
+/* Coil the snake serpentine-style from (0,0) into the shrunken board, keeping its
+   length — used when a resize leaves segments outside the new bounds. */
 static void relocate_snake(Game *g, int want_len) {
     snake_init(&g->snake);
     int cap = BOARD_W * BOARD_H;
@@ -1050,10 +923,8 @@ static void relocate_snake(Game *g, int want_len) {
     g->pending_head = 0; g->pending_count = 0;
 }
 
-/* after a resize the board may have shrunk under the game. State is never
-   reset here: hunt, wrap, pause, the setup gate, the dialed speed and the
-   snake's LENGTH survive — if the snake no longer fits it is relocated, not
-   restarted. Relocating is a move, restarting is not the same thing. */
+/* A resize is a MOVE, never a new run: hunt, wrap, paused, started, tick_ms and
+   length all survive a shrink; a snake too long to fit is relocated, not reset. */
 static void sanitize_after_resize(Game *g) {
     int oob = 0;
     for (int i = 0; i < g->snake.len; i++) {
@@ -1068,13 +939,10 @@ static void sanitize_after_resize(Game *g) {
         int keep_len = g->snake.len;
         int keep_wrap = g->wrap, keep_hunt = g->hunt;
         int keep_paused = g->paused, keep_alive = g->alive;
-        /* game_init resets started/tick_ms, and a resize is NOT a new run.
-           Without these two the overlay cancelled its own setup card: the very
-           first frame it gets it sends {"cmd":"size"}, the snake did not fit
-           that new board, game_init set started = 1 — which silently pressed
-           START for the player — and the run raced off at TICK_MS and died at
-           the wall before a hand ever touched the card. Same reason the `size`
-           command itself must not reset the speed the player just dialed. */
+        /* game_init resets started/tick_ms; a resize is NOT a new run. The
+           overlay's first act is a {"cmd":"size"} — without this carry, the
+           oob branch silently pressed START at the default speed and the card
+           was gone in one frame. */
         int keep_started = g->started, keep_ms = g->tick_ms;
         Food keep_food[MAX_FOOD];
         int keep_n = g->food_n;
@@ -1087,35 +955,27 @@ static void sanitize_after_resize(Game *g) {
         g->alive = keep_alive;
         g->started = keep_started;
         g->tick_ms = keep_ms;
-        /* game_init rolled a fresh set of its own; the player's board wins,
-           because resize must never reset game state — including food they
-           placed by hand. */
+        /* The player's food wins over game_init's fresh roll — resize is not a reset. */
         g->food_n = keep_n;
         memcpy(g->food, keep_food, sizeof(g->food[0]) * (size_t)keep_n);
     }
-    /* A token that ended up outside the new board is re-rolled if it's one of
-       the game's own, DROPPED if the player clicked it in: teleporting a token
-       to somewhere nobody clicked would misreport the player's board. A placed
-       token that ends up under a relocated body stays where it is — it reads as
-       buried until the body moves off it. */
+    /* Off-board tokens: the game's own re-roll, the player's are DROPPED (a
+       teleport to where nobody clicked misreports their board). */
     int nkeep = 0;
     for (int i = 0; i < g->food_n; i++)
         if (!g->food[i].placed || in_bounds(g->food[i].p))
             g->food[nkeep++] = g->food[i];
     g->food_n = nkeep;
-    /* the re-roll is a second pass on purpose: spawn_food judges candidates
-       against the live prefix, so it must not run while stale duplicates from
-       the compaction are still sitting in it */
+    /* The re-roll is a SECOND pass on purpose: spawn_food judges candidates against
+       the live prefix, which the compaction above has to finish first. */
     for (int i = 0; i < g->food_n; i++)
         if (!g->food[i].placed &&
             (!in_bounds(g->food[i].p) || snake_contains(&g->snake, g->food[i].p)))
             spawn_food(g, i);
-    /* a board that held only clicked-in tokens, and lost every one of them to
-       the shrink, would otherwise be left with nothing on it at all */
+    /* A shrink that dropped every token would leave an empty board (see ensure_food). */
     ensure_food(g);
 
-    /* a corpse stranded outside the shrunken board just stops bleeding out
-       (a relocation wipes the whole corpse, since game_init memsets it) */
+    /* A corpse stranded off the new board simply stops bleeding out. */
     int keep = 0;
     for (int i = 0; i < g->snake.wound_len; i++)
         if (g->snake.wound[i].ttl > 0 && in_bounds(g->snake.wound[i].p))
@@ -1131,18 +991,12 @@ static long now_ms(void) {
 
 /* ---- clicking inside the play field places food ---- */
 
-/* Exactly one actionable event per physical click. main() calls mouseinterval(0),
-   which switches OFF ncurses' click synthesis — otherwise a single click can
-   arrive as a press AND a synthesised click for the same cell, and since this
-   handler toggles, the '$' put down by the press would be lifted by the click
-   that trailed it. The usual workaround is a "same cell within N ms counts once"
-   timer, but that also eats a deliberate click-twice-in-one-spot, which is
-   exactly what placing then un-placing looks like. So: act on the press, ignore
-   everything else, keep no state. */
-/* Toggle the token on a BOARD cell. Both front-ends come here — the curses
-   mouse handler after subtracting the border, the overlay's grid straight from
-   QML — so a click means the same thing in either, and the never-empty board
-   cannot be sidestepped by whichever renderer is holding the mouse. */
+/* ONE actionable event per physical click: mouseinterval(0) kills ncurses' click
+   synthesis, so a press is never doubled by a synthesised click — the handler
+   toggles, and a double-fire un-places what it placed. (No "same cell within N
+   ms" timer either: it eats a deliberate click-then-un-click.)
+   Toggle the token on a BOARD cell; both front-ends come HERE, so the never-empty
+   board cannot be sidestepped by whichever renderer holds the mouse. */
 static void place_or_remove(Game *g, Point cell) {
     if (g->paused || !g->alive) return;  /* a menu is over the board: no blind edits */
     if (!in_bounds(cell)) return;        /* border, header, help rows: not the board */
@@ -1167,17 +1021,14 @@ static void handle_click(Game *g, const MEVENT *evp) {
     MEVENT ev = *evp;
     if (!(ev.bstate & BUTTON1_PRESSED)) return;
 
-    /* screen coordinates through the SAME pair draw() writes with, so pointing
-       and painting cannot drift apart */
+    /* Screen coords through the SAME pair draw() writes with — pointing and
+       painting cannot drift apart. */
     place_or_remove(g, (Point){ ev.x - CELL_LEFT, ev.y - CELL_TOP });
 }
 
-/* Drain the whole mouse queue per KEY_MOUSE. Input is nodelay and a mouse
-   report is a multi-byte escape string, so a burst can leave more than one
-   event sitting in the queue while getch hands back a single KEY_MOUSE for it.
-   Reading exactly one event per KEY_MOUSE is how a click ends up acting one
-   click late — the trailing getmouse calls come back ERR once the queue is
-   empty, so the loop can't invent events. */
+/* Drain the WHOLE mouse queue per KEY_MOUSE: under nodelay a burst queues
+   several reports, and reading one per KEY_MOUSE makes a click act one late.
+   Trailing getmouse returns ERR on an empty queue, so the loop cannot invent. */
 static void handle_mouse(Game *g) {
     MEVENT ev;
     while (getmouse(&ev) == OK) handle_click(g, &ev);
@@ -1200,7 +1051,7 @@ static int handle_key(Game *g, int ch) {
             g->pending_count = 0;
             break;
         case 'r':
-            save_highscore(g->snake.len);   /* bank the run before wiping it */
+            save_highscore(g->snake.len);   /* the run's number is on disk before the board is wiped */
             game_init(g);
             break;
         case KEY_UP:
@@ -1229,24 +1080,16 @@ static int handle_key(Game *g, int ch) {
 }
 
 /* ---- the overlay's engine: NDJSON over stdin/stdout, no curses ----
- *
- * `snake --protocol` is the same game with a different face: the rules, the
- * tick clock, the wounds and the AI all stay right here, and QML only ever sees
- * one JSON object per line describing the board. That keeps `snake.c` the single
- * source of truth for how the game works — no second implementation of the rules
- * to drift away from, which is the whole reason for the pipe.
- *
- * QML never drives ticks. If it did, a QML stutter would become game lag; instead
- * the engine keeps its own monotonic clock exactly as the terminal loop does, and
- * input is read with poll() so a click lands in milliseconds rather than waiting
- * for the next tick.
- */
+ * `snake --protocol` is the same game with a different face — one source of
+ * truth for the rules, no second implementation to drift. QML NEVER drives the
+ * clock (a stutter would read as lag); the engine ticks on its own monotonic
+ * clock and polls stdin, so input lands between ticks.
+ * Full grammar and frame shapes: docs/protocol.md. */
 
-/* Flat-object JSON, read without a library: every command the overlay sends is
-   one object with string keys and scalar values, so this only has to locate
-   "key" and read past the colon. Deliberately forgiving — a key we cannot parse
-   is simply not a command, and an unrecognised command is ignored, because a
-   half-written line from the shell must never hang or kill a live game. */
+/* Flat-object JSON, read without a library: locate "key", read past the colon.
+   Deliberately forgiving — an unparseable key or an unknown cmd is not a command,
+   never an error: a half-written line from the shell must never hang the game.
+   Grammar and frame shapes: docs/protocol.md. */
 static int json_string(const char *s, const char *key, char *out, size_t outsz) {
     char needle[40];
     snprintf(needle, sizeof(needle), "\"%s\"", key);
@@ -1282,14 +1125,10 @@ static int json_int(const char *s, const char *key, int *out) {
     return 1;
 }
 
-/* One frame = the whole board, so the overlay never has to reconstruct state
-   from a diff and can repaint from any frame it likes (a missed frame is
-   recoverable, which matters over a pipe into a shell that may reload).
-   Body cells run head-first, matching the order draw() walks the ring, and an
-   expired corpse is left out rather than sent as ttl 0.
-   Returns 0 when the reader has gone away, which the loop treats as death: a
-   self-ticking engine that keeps emitting into a closed pipe would run
-   invisibly for the rest of the session. */
+/* One frame = the WHOLE board, never a diff: a dropped frame is a skipped paint,
+   never a lost state. Returns 0 when the reader has gone — the loop treats that
+   as death, because an engine emitting into a closed pipe would run invisibly
+   for the rest of the session. */
 static int emit_frame(const Game *g, long tick) {
     Point head = g->snake.cells[g->snake.head];
     printf("{\"event\":\"frame\",\"tick\":%ld,\"w\":%d,\"h\":%d,"
@@ -1325,9 +1164,8 @@ static int emit_frame(const Game *g, long tick) {
     return 1;
 }
 
-/* One command from the overlay; returns 0 when the engine should stop.
-   Every branch mirrors the terminal's own key handler above, so the two
-   front-ends cannot quietly grow into two different games. */
+/* One command from the overlay; returns 0 when the engine should stop. Every
+   branch mirrors the terminal's key handler — one game, two faces. */
 static int handle_command(Game *g, const char *line) {
     char cmd[32];
     if (!json_string(line, "cmd", cmd, sizeof(cmd))) return 1;
@@ -1356,11 +1194,8 @@ static int handle_command(Game *g, const char *line) {
         if (g->started && g->alive) g->paused = !g->paused;
         return 1;
     }
-    /* Wrap is a SETUP choice, which is what makes it a rule rather than a mood:
-       the moment the snake is moving these commands are ignored, so the overlay can
-       take the control away and still be telling the truth about it. `on` is the
-       absolute form the card uses; bare `wrap` keeps toggling for any client that
-       already knows the state. */
+    /* wrap/speed are CARD-ONLY: refused once the run began (g->started), and the
+       `on` form is absolute while bare `wrap` toggles. */
     if (strcmp(cmd, "wrap") == 0) {
         if (g->started) return 1;
         int on = -1;
@@ -1373,10 +1208,8 @@ static int handle_command(Game *g, const char *line) {
         if (g->started) return 1;                /* in-game: the speed is decided */
         int ms = 0;
         if (!json_int(line, "ms", &ms)) return 1;
-        /* the clamp lives HERE, not in the UI: a client that sends 0 must not get a
-           busy-spinning tick loop, and one that sends 100000 must not look frozen.
-           Saving the CLAMPED value is the point — the file is a valid setup by
-           construction, so no client can poison tomorrow's card through today's pipe. */
+        /* The clamp lives HERE, not in the UI, and the CLAMPED value is what gets
+           saved — no client can poison tomorrow's card through today's pipe. */
         if (ms < MIN_TICK_MS) ms = MIN_TICK_MS;
         if (ms > MAX_TICK_MS) ms = MAX_TICK_MS;
         g->tick_ms = ms;
@@ -1396,8 +1229,8 @@ static int handle_command(Game *g, const char *line) {
         return 1;
     }
     if (strcmp(cmd, "restart") == 0) {
-        save_highscore(g->snake.len);            /* the run's number goes with it: banked
-                                                    here, on disk on the curses face */
+        save_highscore(g->snake.len);            /* the run's number goes to the file first —
+                                                    an instant replay must not eat the record */
         /* game_init memsets the whole Game, so the setup has to be carried across on
            purpose: a restart replays under the wrap and speed the player chose, and
            a restart while still on the setup card stays on the setup card. */
@@ -1424,10 +1257,8 @@ static int handle_command(Game *g, const char *line) {
     }
     if (strcmp(cmd, "flush") == 0) {
         save_highscore(g->snake.len);
-        /* On the overlay this is the save: both files land here. The QML sends `flush`
-           immediately before `quit`, so the pair writes once; a client that sent `flush`
-           mid-run would be asking for a write inside the watched folder, and would get
-           the panel reloaded — which is why the overlay only ever sends it on the way out. */
+        /* A guarantee, not a necessity: the write-through rule already banked the
+           number when it changed. Mid-run `flush` is legal for the same reason. */
         flush_state();
         return 1;
     }
@@ -1440,25 +1271,17 @@ static int handle_command(Game *g, const char *line) {
 }
 
 static int protocol_run(void) {
-    /* A closed pipe must reach us as a write error we can act on, not as the
-       SIGPIPE that would otherwise kill the process mid-frame — and, worse for
-       the save file, before flush_state ever ran. */
+    /* A closed pipe must reach us as a write error, not as a mid-frame SIGPIPE. */
     signal(SIGPIPE, SIG_IGN);
-    /* The overlay asks the engine to stop; the shell often does not wait for the
-       answer. Without these, being killed is the one way to lose a run. */
+    /* Redundancy for the endings that never ask (see save_highscore's one rule). */
     signal(SIGTERM, terminate_handler);
     signal(SIGHUP, terminate_handler);
     signal(SIGINT, terminate_handler);
-    /* The overlay's files live INSIDE the plugin folder, so they are written at the end
-       of a run and not while it plays: the shell watches that folder and a write is a
-       panel reload. See save_highscore for the whole argument. */
-    save_on_beat = 0;
     setvbuf(stdout, NULL, _IOLBF, 0);
     Game g;
     game_init(&g);
-    /* The player has not said START yet. Everything about the run — wrap, speed —
-       is editable until the card hands it over, and nothing moves until then; the
-       frames keep flowing so the card paints from real state. */
+    /* THE GATE: nothing moves and nothing steers until `start` lands; the frames
+       keep flowing so the card paints from real state. */
     g.started = 0;
     load_highscore(&best_len);
     /* The card comes back as the player left it. Loaded here, BEFORE the tick clock is
@@ -1482,9 +1305,9 @@ static int protocol_run(void) {
             char buf[1024];
             ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
             if (n < 0 && errno == EINTR) continue;
-            if (n <= 0) {              /* the overlay is gone (pipe closed): bank and go,
-                                          or a shell reload leaves a process grinding BFS
-                                          invisibly for the rest of the session */
+            if (n <= 0) {              /* the overlay is gone (pipe closed): prove both files
+                                          current and go, or a shell reload leaves a process
+                                          grinding BFS invisibly for the rest of the session */
                 flush_state();
                 return 0;
             }
@@ -1505,7 +1328,7 @@ static int protocol_run(void) {
         now = now_ms();
         if (now >= next_tick) {
             game_step(&g);
-            save_highscore(g.snake.len);   /* free unless this tick beat the record */
+            save_highscore(g.snake.len);   /* cheap unless this tick beat the record, which writes */
             tick_no++;
             next_tick = now + tick_delay_ms(&g);
             dirty = 1;
@@ -1558,12 +1381,8 @@ int main(int argc, char **argv) {
     keypad(stdscr, TRUE);
     curs_set(0);
     nodelay(stdscr, TRUE);
-    /* mouseinterval(0): never coalesce press+release into a synthesised "click".
-       Button events only, deliberately NOT ALL_MOUSE_EVENTS: that mask includes
-       REPORT_MOUSE_POSITION (any-motion tracking), which would pour a stream of
-       motion events into the 5ms input drain for no benefit. A return of 0 means
-       this terminal/terminfo offers no mouse at all — the game just plays, the
-       clicks simply never arrive. */
+    /* Button events only, deliberately NOT ALL_MOUSE_EVENTS: that mask adds
+       motion tracking, a stream of events into the 5ms drain for no benefit. */
     mouseinterval(0);
     mousemask(BUTTON1_PRESSED | BUTTON1_RELEASED, NULL);
     setup_colors();
@@ -1573,13 +1392,11 @@ int main(int argc, char **argv) {
     game_init(&g);
     int highscore = 0;
     load_highscore(&highscore);
-    /* The terminal has no card, but `x` is the same wrap choice and `TICK_MS` is the
-       same dial, so it honours the same file: you play the way you left the overlay. */
+    /* The terminal has no card, but `x` and the default tick honour the same file. */
     load_setup(&g.wrap, &g.tick_ms);
 
-    /* Input is drained every POLL_MS so controls feel instant, while the
-       snake only advances on its own tick clock — input latency never
-       waits for a tick, and ticks never depend on key mashing. */
+    /* Input drains every POLL_MS; the snake moves on its own tick clock — input
+       never waits for a tick. */
     #define POLL_MS 5
     long next_tick = now_ms() + tick_delay_ms(&g);
     int was_alive = 1;

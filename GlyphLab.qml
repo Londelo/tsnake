@@ -3,26 +3,12 @@ import Quickshell
 import qs.Commons
 import qs.Ui
 
-// Glyph lab: the "what can I actually draw with?" window. Summon it with
+// Glyph lab: the "what can I actually draw with?" window. Summon:
 //   omarchy-shell shell summon io.github.londelo.tsnake '{"mode":"glyphs"}'
-// and it shows every character worth putting on the board, rendered IN THE FONT
-// it would be rendered in, with the codepoint and the Unicode name under it.
-//
-// It is a sibling of the game window, not a child of it: Overlay.qml instantiates
-// this through a Loader, so a mistake in this file takes the lab down and leaves
-// the game playable. It also starts no engine — the lab is a design tool, and an
-// AI-driven snake ticking behind the catalogue would just be noise (and a second
-// writer of the high-score file).
-//
-// Where the data comes from — nothing here is guessed:
-//   catalog       generated (see the header above it): official Unicode names from
-//                 python unicodedata, coverage from `fc-match "Adwaita Mono:charset="`
-//                 against the board font, Nerd Font names from that font's own post
-//                 table.
-//   fonts[]       every family `fc-list` reports as installed on this box.
-//   defaults      the terminal build's own chars: '$' food, 'o' body, '^' 'v' '<' '>'
-//                 head (snake.c:792, :806, :816 — the corpse is 'o' in red there,
-//                 which is NOT what the overlay paints today: it fills the cell).
+// Sibling of the game window via Overlay.qml's Loader: a mistake here kills the
+// lab only, never the board. Starts NO engine (design tool; no second high-score writer).
+// The catalog is data: data/glyphs.json (three moves up from this file), read
+// by catalogFile.
 Item {
   id: lab
 
@@ -45,17 +31,13 @@ Item {
 
   property int pickSerial: 0
 
-  // How many times the preview has actually been painted. Not a decoration:
-  // 'the preview never refreshed' is unfalsifiable from the outside, and this makes
-  // it a number a single click can check. Kept on the root rather than on the Canvas
-  // so the canvas never has a binding that depends on its own paint.
+  // Paint counter: makes "the preview never refreshed" checkable with one click.
+  // On the root, not the Canvas, so the canvas has no binding on its own paint.
   property int paintCount: 0
 
   // --------------------------------------------------------------- fonts
-  // All of these are `fc-list` output from this machine — not a list of fonts
-  // that exist in the abstract. The first entry is deliberately the alias the
-  // game itself asks for (Style.font.menuFamily, "monospace"), so the lab's
-  // default view IS the board as it currently looks.
+  // `fc-list` output from this machine. First entry = the alias the game itself
+  // asks for (menuFamily → "monospace"), so the lab's default view is the board.
   readonly property var fonts: [
     { fam: Style.font.menuFamily, label: "THE GAME FONT (menuFamily)", note: "what the board is drawn in today" },
     { fam: "Adwaita Mono", label: "Adwaita Mono", note: "what the alias resolves to here" },
@@ -71,14 +53,9 @@ Item {
 
   readonly property string currentFont: fonts[fontIndex].fam
 
-  // The family every c:0/c:1 verdict in the catalog was measured against:
-  // `fc-match "Adwaita Mono:charset=XXXX"` (the script is /tmp/cov.sh). The
-  // board font is configured as the alias `monospace`, and on this box
-  // `fc-match monospace` answers "Adwaita Mono" — so the alias is what the game
-  // asks for, and this is the face that actually answers. Naming only the alias
-  // in the legend would report a coverage verdict against a font that was never
-  // measured; the resolved name is what makes "green = you already have it"
-  // checkable.
+  // The face every c:0/c:1 verdict was measured against: `fc-match monospace`
+  // answers "Adwaita Mono" here. Naming the resolved face (not the alias) keeps
+  // "green = you already have it" checkable.
   readonly property string probeFont: "Adwaita Mono"
 
   // ----------------------------------------------------------------- slots
@@ -130,10 +107,8 @@ Item {
                    + (cell.c === 0 ? "  (in " + lab.currentFont + ")"
                                    : cell.c === 2 ? "  (NEEDS " + cell.f + ")"
                                                   : "  (BORROWED from " + cell.f + ")")
-    // Clicking a glyph also puts it on the clipboard, so it can be pasted
-    // straight into a chat or an editor. First-party precedent is
-    // plugins/panels/network/Panel.qml:450 (tailscale/Service.qml:109 pipes
-    // through bash; wl-copy takes argv, so there is nothing to quote here).
+    // A click also copies the glyph to the clipboard (wl-copy takes argv,
+    // nothing to quote), like panels/panels/network/Panel.qml's Tailscale pipe.
     Quickshell.execDetached(["wl-copy", cell.ch])
     lab.bump()
   }
@@ -155,8 +130,7 @@ Item {
   }
 
   function summary() {
-    // The pasted block is the deliverable, so it says which family to put in the
-    // setting AND which face the substitution notes were judged against.
+    // Names both the chosen family and the face the substitution notes were judged against.
     var out = ["tsnake glyph set — font: " + lab.currentFont
                + "  (coverage judged against " + lab.probeFont + ")"]
     for (var i = 0; i < lab.roles.length; i++) {
@@ -180,287 +154,80 @@ Item {
     if (lab.host && typeof lab.host.dismiss === "function") lab.host.dismiss()
   }
 
-  // The catalog. c: 0 in the board font, 1 fontconfig borrows it from `f`,
-  // 2 Nerd Font private use, 3 never probed.
-  // The generator was a throwaway /tmp script (one fc-match probe per cell) and /tmp
-  // gets reaped, so this table is hand-carried data now — adding a cell by hand is
-  // fine, guessing its coverage is not: measure it with
-  // `fc-match "Adwaita Mono:charset=XXXX"` and trust that over the codepoint's looks.
-  // name: python unicodedata (UCD 16.0.0).  coverage: fc-match against
-  // the board font "Adwaita Mono" — c:0 native, c:1 fontconfig
-  // substitutes it from family f (renders, different metrics), c:2 Nerd
-  // Font private use (needs a Nerd Font), c:3 never probed.
-  readonly property var catalog: [
-    { id:"arrows", label:"ARROWS — steering, the head, hunt badges", note:"direction is the one thing the head must say out loud", cells:[
-      {cp:0x2190, ch:"←", n:"LEFTWARDS ARROW", c:0, f:""},
-      {cp:0x2191, ch:"↑", n:"UPWARDS ARROW", c:0, f:""},
-      {cp:0x2192, ch:"→", n:"RIGHTWARDS ARROW", c:0, f:""},
-      {cp:0x2193, ch:"↓", n:"DOWNWARDS ARROW", c:0, f:""},
-      {cp:0x21D0, ch:"⇐", n:"LEFTWARDS DOUBLE ARROW", c:0, f:""},
-      {cp:0x21D1, ch:"⇑", n:"UPWARDS DOUBLE ARROW", c:0, f:""},
-      {cp:0x21D2, ch:"⇒", n:"RIGHTWARDS DOUBLE ARROW", c:0, f:""},
-      {cp:0x21D3, ch:"⇓", n:"DOWNWARDS DOUBLE ARROW", c:0, f:""},
-      {cp:0x27F5, ch:"⟵", n:"LONG LEFTWARDS ARROW", c:1, f:"JetBrainsMono Nerd Font"},
-      {cp:0x27F6, ch:"⟶", n:"LONG RIGHTWARDS ARROW", c:1, f:"JetBrainsMono Nerd Font"},
-      {cp:0x27F7, ch:"⟷", n:"LONG LEFT RIGHT ARROW", c:1, f:"JetBrainsMono Nerd Font"},
-      {cp:0x27F8, ch:"⟸", n:"LONG LEFTWARDS DOUBLE ARROW", c:1, f:"Adwaita Sans"},
-      {cp:0x2794, ch:"➔", n:"HEAVY WIDE-HEADED RIGHTWARDS ARROW", c:0, f:""},
-      {cp:0x2799, ch:"➙", n:"HEAVY RIGHTWARDS ARROW", c:1, f:"Noto Sans Symbols 2"},
-      {cp:0x279B, ch:"➛", n:"DRAFTING POINT RIGHTWARDS ARROW", c:1, f:"Noto Sans Math"},
-      {cp:0x279E, ch:"➞", n:"HEAVY TRIANGLE-HEADED RIGHTWARDS ARROW", c:0, f:""},
-      {cp:0x27A2, ch:"➢", n:"THREE-D TOP-LIGHTED RIGHTWARDS ARROWHEAD", c:0, f:""},
-      {cp:0x27A4, ch:"➤", n:"BLACK RIGHTWARDS ARROWHEAD", c:0, f:""},
-      {cp:0x27A6, ch:"➦", n:"HEAVY BLACK CURVED UPWARDS AND RIGHTWARDS ARROW", c:0, f:""},
-      {cp:0x2B92, ch:"⮒", n:"NEWLINE LEFT", c:0, f:""},
-      {cp:0x2B93, ch:"⮓", n:"NEWLINE RIGHT", c:0, f:""},
-      {cp:0x2B94, ch:"⮔", n:"FOUR CORNER ARROWS CIRCLING ANTICLOCKWISE", c:0, f:""},
-      {cp:0x2B95, ch:"⮕", n:"RIGHTWARDS BLACK ARROW", c:0, f:""},
-      {cp:0x2B9C, ch:"⮜", n:"BLACK LEFTWARDS EQUILATERAL ARROWHEAD", c:1, f:"Noto Sans Symbols 2"},
-      {cp:0x2B9D, ch:"⮝", n:"BLACK UPWARDS EQUILATERAL ARROWHEAD", c:1, f:"Noto Sans Symbols 2"},
-      {cp:0x2941, ch:"⥁", n:"CLOCKWISE CLOSED CIRCLE ARROW", c:0, f:""},
-    ] },
-    { id:"head", label:"HEAD SHAPES — triangles, corners, quadrants", note:"four of these, one per heading, replaces the terminal's ^ v < >", cells:[
-      {cp:0x25B2, ch:"▲", n:"BLACK UP-POINTING TRIANGLE", c:0, f:""},
-      {cp:0x25BC, ch:"▼", n:"BLACK DOWN-POINTING TRIANGLE", c:0, f:""},
-      {cp:0x25B6, ch:"▶", n:"BLACK RIGHT-POINTING TRIANGLE", c:0, f:""},
-      {cp:0x25C0, ch:"◀", n:"BLACK LEFT-POINTING TRIANGLE", c:0, f:""},
-      {cp:0x25B8, ch:"▸", n:"BLACK RIGHT-POINTING SMALL TRIANGLE", c:0, f:""},
-      {cp:0x25C2, ch:"◂", n:"BLACK LEFT-POINTING SMALL TRIANGLE", c:0, f:""},
-      {cp:0x25BA, ch:"►", n:"BLACK RIGHT-POINTING POINTER", c:0, f:""},
-      {cp:0x25C4, ch:"◄", n:"BLACK LEFT-POINTING POINTER", c:0, f:""},
-      {cp:0x25E4, ch:"◤", n:"BLACK UPPER LEFT TRIANGLE", c:0, f:""},
-      {cp:0x25E5, ch:"◥", n:"BLACK UPPER RIGHT TRIANGLE", c:0, f:""},
-      {cp:0x25E2, ch:"◢", n:"BLACK LOWER RIGHT TRIANGLE", c:0, f:""},
-      {cp:0x25E3, ch:"◣", n:"BLACK LOWER LEFT TRIANGLE", c:0, f:""},
-      {cp:0x25F0, ch:"◰", n:"WHITE SQUARE WITH UPPER LEFT QUADRANT", c:0, f:""},
-      {cp:0x25F1, ch:"◱", n:"WHITE SQUARE WITH LOWER LEFT QUADRANT", c:0, f:""},
-      {cp:0x25F2, ch:"◲", n:"WHITE SQUARE WITH LOWER RIGHT QUADRANT", c:0, f:""},
-      {cp:0x25F3, ch:"◳", n:"WHITE SQUARE WITH UPPER RIGHT QUADRANT", c:0, f:""},
-    ] },
-    { id:"blocks", label:"BLOCKS + DOTS — body segments", note:"the body is a solid cell today; these are the alternatives to a plain square", cells:[
-      {cp:0x2588, ch:"█", n:"FULL BLOCK", c:0, f:""},
-      {cp:0x2593, ch:"▓", n:"DARK SHADE", c:0, f:""},
-      {cp:0x2592, ch:"▒", n:"MEDIUM SHADE", c:0, f:""},
-      {cp:0x2591, ch:"░", n:"LIGHT SHADE", c:0, f:""},
-      {cp:0x2580, ch:"▀", n:"UPPER HALF BLOCK", c:0, f:""},
-      {cp:0x2584, ch:"▄", n:"LOWER HALF BLOCK", c:0, f:""},
-      {cp:0x258F, ch:"▏", n:"LEFT ONE EIGHTH BLOCK", c:0, f:""},
-      {cp:0x258C, ch:"▌", n:"LEFT HALF BLOCK", c:0, f:""},
-      {cp:0x258B, ch:"▋", n:"LEFT FIVE EIGHTHS BLOCK", c:0, f:""},
-      {cp:0x25A0, ch:"■", n:"BLACK SQUARE", c:0, f:""},
-      {cp:0x25A1, ch:"□", n:"WHITE SQUARE", c:0, f:""},
-      {cp:0x25AA, ch:"▪", n:"BLACK SMALL SQUARE", c:0, f:""},
-      {cp:0x25AB, ch:"▫", n:"WHITE SMALL SQUARE", c:0, f:""},
-      {cp:0x25A4, ch:"▤", n:"SQUARE WITH HORIZONTAL FILL", c:0, f:""},
-      {cp:0x25A5, ch:"▥", n:"SQUARE WITH VERTICAL FILL", c:0, f:""},
-      {cp:0x25A6, ch:"▦", n:"SQUARE WITH ORTHOGONAL CROSSHATCH FILL", c:0, f:""},
-      {cp:0x25CF, ch:"●", n:"BLACK CIRCLE", c:0, f:""},
-      {cp:0x25CB, ch:"○", n:"WHITE CIRCLE", c:0, f:""},
-      {cp:0x25C9, ch:"◉", n:"FISHEYE", c:0, f:""},
-      {cp:0x25CE, ch:"◎", n:"BULLSEYE", c:0, f:""},
-      {cp:0x25C6, ch:"◆", n:"BLACK DIAMOND", c:0, f:""},
-      {cp:0x25C7, ch:"◇", n:"WHITE DIAMOND", c:0, f:""},
-      {cp:0x25C8, ch:"◈", n:"WHITE DIAMOND CONTAINING BLACK SMALL DIAMOND", c:0, f:""},
-      {cp:0x25D0, ch:"◐", n:"CIRCLE WITH LEFT HALF BLACK", c:0, f:""},
-      {cp:0x25D1, ch:"◑", n:"CIRCLE WITH RIGHT HALF BLACK", c:0, f:""},
-      {cp:0x25D2, ch:"◒", n:"CIRCLE WITH LOWER HALF BLACK", c:0, f:""},
-      {cp:0x25D3, ch:"◓", n:"CIRCLE WITH UPPER HALF BLACK", c:0, f:""},
-      {cp:0x25DC, ch:"◜", n:"UPPER LEFT QUADRANT CIRCULAR ARC", c:0, f:""},
-      {cp:0x25DD, ch:"◝", n:"UPPER RIGHT QUADRANT CIRCULAR ARC", c:0, f:""},
-      {cp:0x25DE, ch:"◞", n:"LOWER RIGHT QUADRANT CIRCULAR ARC", c:0, f:""},
-      {cp:0x25DF, ch:"◟", n:"LOWER LEFT QUADRANT CIRCULAR ARC", c:0, f:""},
-      {cp:0x25E6, ch:"◦", n:"WHITE BULLET", c:0, f:""},
-      {cp:0x25EB, ch:"◫", n:"WHITE SQUARE WITH VERTICAL BISECTING LINE", c:0, f:""},
-      {cp:0x25AE, ch:"▮", n:"BLACK VERTICAL RECTANGLE", c:0, f:""},
-      {cp:0x25AF, ch:"▯", n:"WHITE VERTICAL RECTANGLE", c:0, f:""},
-      {cp:0x2B1B, ch:"⬛", n:"BLACK LARGE SQUARE", c:0, f:""},
-      {cp:0x2B1C, ch:"⬜", n:"WHITE LARGE SQUARE", c:0, f:""},
-      {cp:0x2B21, ch:"⬡", n:"WHITE HEXAGON", c:0, f:""},
-      {cp:0x2B22, ch:"⬢", n:"BLACK HEXAGON", c:0, f:""},
-      {cp:0x2B23, ch:"⬣", n:"HORIZONTAL BLACK HEXAGON", c:0, f:""},
-      {cp:0x2B24, ch:"⬤", n:"BLACK LARGE CIRCLE", c:0, f:""},
-      {cp:0x2B25, ch:"⬥", n:"BLACK MEDIUM DIAMOND", c:0, f:""},
-      {cp:0x2B26, ch:"⬦", n:"WHITE MEDIUM DIAMOND", c:0, f:""},
-    ] },
-    { id:"braille", label:"BRAILLE — dense 2x4 dot cells", note:"reads as texture at small cell sizes; U+2800 is the blank cell", cells:[
-      {cp:0x2800, ch:"⠀", n:"BRAILLE PATTERN BLANK", c:0, f:""},
-      {cp:0x2837, ch:"⠷", n:"BRAILLE PATTERN DOTS-12356", c:0, f:""},
-      {cp:0x2847, ch:"⡇", n:"BRAILLE PATTERN DOTS-1237", c:0, f:""},
-      {cp:0x289B, ch:"⢛", n:"BRAILLE PATTERN DOTS-12458", c:0, f:""},
-      {cp:0x28A7, ch:"⢧", n:"BRAILLE PATTERN DOTS-12368", c:0, f:""},
-      {cp:0x28BF, ch:"⢿", n:"BRAILLE PATTERN DOTS-1234568", c:0, f:""},
-      {cp:0x28FF, ch:"⣿", n:"BRAILLE PATTERN DOTS-12345678", c:0, f:""},
-    ] },
-    { id:"box", label:"BOX DRAWING — borders, grid lines", note:"the border is painted today; these are how a glyph border would look", cells:[
-      {cp:0x2500, ch:"─", n:"BOX DRAWINGS LIGHT HORIZONTAL", c:0, f:""},
-      {cp:0x2501, ch:"━", n:"BOX DRAWINGS HEAVY HORIZONTAL", c:0, f:""},
-      {cp:0x2502, ch:"│", n:"BOX DRAWINGS LIGHT VERTICAL", c:0, f:""},
-      {cp:0x2503, ch:"┃", n:"BOX DRAWINGS HEAVY VERTICAL", c:0, f:""},
-      {cp:0x250C, ch:"┌", n:"BOX DRAWINGS LIGHT DOWN AND RIGHT", c:0, f:""},
-      {cp:0x2510, ch:"┐", n:"BOX DRAWINGS LIGHT DOWN AND LEFT", c:0, f:""},
-      {cp:0x2514, ch:"└", n:"BOX DRAWINGS LIGHT UP AND RIGHT", c:0, f:""},
-      {cp:0x2518, ch:"┘", n:"BOX DRAWINGS LIGHT UP AND LEFT", c:0, f:""},
-      {cp:0x250F, ch:"┏", n:"BOX DRAWINGS HEAVY DOWN AND RIGHT", c:0, f:""},
-      {cp:0x2513, ch:"┓", n:"BOX DRAWINGS HEAVY DOWN AND LEFT", c:0, f:""},
-      {cp:0x2517, ch:"┗", n:"BOX DRAWINGS HEAVY UP AND RIGHT", c:0, f:""},
-      {cp:0x251B, ch:"┛", n:"BOX DRAWINGS HEAVY UP AND LEFT", c:0, f:""},
-      {cp:0x251C, ch:"├", n:"BOX DRAWINGS LIGHT VERTICAL AND RIGHT", c:0, f:""},
-      {cp:0x2524, ch:"┤", n:"BOX DRAWINGS LIGHT VERTICAL AND LEFT", c:0, f:""},
-      {cp:0x252C, ch:"┬", n:"BOX DRAWINGS LIGHT DOWN AND HORIZONTAL", c:0, f:""},
-      {cp:0x2534, ch:"┴", n:"BOX DRAWINGS LIGHT UP AND HORIZONTAL", c:0, f:""},
-      {cp:0x253C, ch:"┼", n:"BOX DRAWINGS LIGHT VERTICAL AND HORIZONTAL", c:0, f:""},
-      {cp:0x254C, ch:"╌", n:"BOX DRAWINGS LIGHT DOUBLE DASH HORIZONTAL", c:0, f:""},
-      {cp:0x254D, ch:"╍", n:"BOX DRAWINGS HEAVY DOUBLE DASH HORIZONTAL", c:0, f:""},
-      {cp:0x2550, ch:"═", n:"BOX DRAWINGS DOUBLE HORIZONTAL", c:0, f:""},
-      {cp:0x2551, ch:"║", n:"BOX DRAWINGS DOUBLE VERTICAL", c:0, f:""},
-      {cp:0x2506, ch:"┆", n:"BOX DRAWINGS LIGHT TRIPLE DASH VERTICAL", c:0, f:""},
-      {cp:0x2508, ch:"┈", n:"BOX DRAWINGS LIGHT QUADRUPLE DASH HORIZONTAL", c:0, f:""},
-      {cp:0x250A, ch:"┊", n:"BOX DRAWINGS LIGHT QUADRUPLE DASH VERTICAL", c:0, f:""},
-    ] },
-    { id:"dingbats", label:"DINGBATS — food tokens, sparks", note:"stars, snowflakes, scissors: the stylish token shelf", cells:[
-      {cp:0x2605, ch:"★", n:"BLACK STAR", c:0, f:""},
-      {cp:0x2606, ch:"☆", n:"WHITE STAR", c:0, f:""},
-      {cp:0x2733, ch:"✳", n:"EIGHT SPOKED ASTERISK", c:0, f:""},
-      {cp:0x2734, ch:"✴", n:"EIGHT POINTED BLACK STAR", c:0, f:""},
-      {cp:0x2736, ch:"✶", n:"SIX POINTED BLACK STAR", c:0, f:""},
-      {cp:0x2739, ch:"✹", n:"TWELVE POINTED BLACK STAR", c:0, f:""},
-      {cp:0x273B, ch:"✻", n:"TEARDROP-SPOKED ASTERISK", c:0, f:""},
-      {cp:0x273C, ch:"✼", n:"OPEN CENTRE TEARDROP-SPOKED ASTERISK", c:0, f:""},
-      {cp:0x273E, ch:"✾", n:"SIX PETALLED BLACK AND WHITE FLORETTE", c:0, f:""},
-      {cp:0x273F, ch:"✿", n:"BLACK FLORETTE", c:0, f:""},
-      {cp:0x2740, ch:"❀", n:"WHITE FLORETTE", c:0, f:""},
-      {cp:0x2741, ch:"❁", n:"EIGHT PETALLED OUTLINED BLACK FLORETTE", c:0, f:""},
-      {cp:0x2742, ch:"❂", n:"CIRCLED OPEN CENTRE EIGHT POINTED STAR", c:0, f:""},
-      {cp:0x2746, ch:"❆", n:"HEAVY CHEVRON SNOWFLAKE", c:0, f:""},
-      {cp:0x2748, ch:"❈", n:"HEAVY SPARKLE", c:0, f:""},
-      {cp:0x2749, ch:"❉", n:"BALLOON-SPOKED ASTERISK", c:0, f:""},
-      {cp:0x274B, ch:"❋", n:"HEAVY EIGHT TEARDROP-SPOKED PROPELLER ASTERISK", c:0, f:""},
-      {cp:0x274D, ch:"❍", n:"SHADOWED WHITE CIRCLE", c:1, f:"Noto Sans Symbols 2"},
-      {cp:0x274F, ch:"❏", n:"LOWER RIGHT DROP-SHADOWED WHITE SQUARE", c:1, f:"Noto Sans Symbols 2"},
-      {cp:0x2750, ch:"❐", n:"UPPER RIGHT DROP-SHADOWED WHITE SQUARE", c:1, f:"Noto Sans Symbols 2"},
-      {cp:0x2751, ch:"❑", n:"LOWER RIGHT SHADOWED WHITE SQUARE", c:1, f:"Noto Sans Symbols 2"},
-      {cp:0x2752, ch:"❒", n:"UPPER RIGHT SHADOWED WHITE SQUARE", c:1, f:"Noto Sans Symbols 2"},
-      {cp:0x2756, ch:"❖", n:"BLACK DIAMOND MINUS WHITE X", c:0, f:""},
-      {cp:0x2758, ch:"❘", n:"LIGHT VERTICAL BAR", c:0, f:""},
-      {cp:0x275A, ch:"❚", n:"HEAVY VERTICAL BAR", c:0, f:""},
-      {cp:0x2720, ch:"✠", n:"MALTESE CROSS", c:0, f:""},
-      {cp:0x271A, ch:"✚", n:"HEAVY GREEK CROSS", c:0, f:""},
-      {cp:0x271B, ch:"✛", n:"OPEN CENTRE CROSS", c:0, f:""},
-      {cp:0x271C, ch:"✜", n:"HEAVY OPEN CENTRE CROSS", c:0, f:""},
-      {cp:0x271D, ch:"✝", n:"LATIN CROSS", c:0, f:""},
-      {cp:0x271E, ch:"✞", n:"SHADOWED WHITE LATIN CROSS", c:1, f:"Noto Sans Symbols"},
-      {cp:0x271F, ch:"✟", n:"OUTLINED LATIN CROSS", c:1, f:"Noto Sans Symbols"},
-      {cp:0x274C, ch:"❌", n:"CROSS MARK", c:0, f:""},
-      {cp:0x274E, ch:"❎", n:"NEGATIVE SQUARED CROSS MARK", c:0, f:""},
-      {cp:0x2757, ch:"❗", n:"HEAVY EXCLAMATION MARK SYMBOL", c:1, f:"Noto Color Emoji"},
-    ] },
-    { id:"misc", label:"MISC SYMBOLS — suits, badges, status", note:"cards, music, weather, checks: HUD and status-label material", cells:[
-      {cp:0x2620, ch:"☠", n:"SKULL AND CROSSBONES", c:1, f:"Noto Color Emoji"},
-      {cp:0x2622, ch:"☢", n:"RADIOACTIVE SIGN", c:1, f:"Noto Color Emoji"},
-      {cp:0x2623, ch:"☣", n:"BIOHAZARD SIGN", c:1, f:"Noto Color Emoji"},
-      {cp:0x263A, ch:"☺", n:"WHITE SMILING FACE", c:0, f:""},
-      {cp:0x2639, ch:"☹", n:"WHITE FROWNING FACE", c:0, f:""},
-      {cp:0x2660, ch:"♠", n:"BLACK SPADE SUIT", c:0, f:""},
-      {cp:0x2663, ch:"♣", n:"BLACK CLUB SUIT", c:0, f:""},
-      {cp:0x2665, ch:"♥", n:"BLACK HEART SUIT", c:0, f:""},
-      {cp:0x2666, ch:"♦", n:"BLACK DIAMOND SUIT", c:0, f:""},
-      {cp:0x266A, ch:"♪", n:"EIGHTH NOTE", c:0, f:""},
-      {cp:0x266D, ch:"♭", n:"MUSIC FLAT SIGN", c:0, f:""},
-      {cp:0x266F, ch:"♯", n:"MUSIC SHARP SIGN", c:0, f:""},
-      {cp:0x2691, ch:"⚑", n:"BLACK FLAG", c:0, f:""},
-      {cp:0x2693, ch:"⚓", n:"ANCHOR", c:1, f:"Noto Color Emoji"},
-      {cp:0x2696, ch:"⚖", n:"SCALES", c:1, f:"Noto Color Emoji"},
-      {cp:0x2699, ch:"⚙", n:"GEAR", c:0, f:""},
-      {cp:0x26A0, ch:"⚠", n:"WARNING SIGN", c:0, f:""},
-      {cp:0x26A1, ch:"⚡", n:"HIGH VOLTAGE SIGN", c:0, f:""},
-      {cp:0x26B0, ch:"⚰", n:"COFFIN", c:1, f:"Noto Color Emoji"},
-      {cp:0x26BD, ch:"⚽", n:"SOCCER BALL", c:1, f:"Noto Sans Mono CJK KR"},
-      {cp:0x26BE, ch:"⚾", n:"BASEBALL", c:1, f:"Noto Sans Mono CJK KR"},
-      {cp:0x26C4, ch:"⛄", n:"SNOWMAN WITHOUT SNOW", c:1, f:"Noto Color Emoji"},
-      {cp:0x26CF, ch:"⛏", n:"PICK", c:1, f:"Noto Color Emoji"},
-      {cp:0x26D3, ch:"⛓", n:"CHAINS", c:1, f:"Noto Color Emoji"},
-      {cp:0x26D4, ch:"⛔", n:"NO ENTRY", c:1, f:"Noto Color Emoji"},
-      {cp:0x26F2, ch:"⛲", n:"FOUNTAIN", c:1, f:"Noto Color Emoji"},
-      {cp:0x26F9, ch:"⛹", n:"PERSON WITH BALL", c:1, f:"Noto Color Emoji"},
-      {cp:0x26FD, ch:"⛽", n:"FUEL PUMP", c:1, f:"Noto Color Emoji"},
-      {cp:0x2020, ch:"†", n:"DAGGER", c:0, f:""},
-      {cp:0x2021, ch:"‡", n:"DOUBLE DAGGER", c:0, f:""},
-      {cp:0x203C, ch:"‼", n:"DOUBLE EXCLAMATION MARK", c:0, f:""},
-      {cp:0x2049, ch:"⁉", n:"EXCLAMATION QUESTION MARK", c:0, f:""},
-      {cp:0x2042, ch:"⁂", n:"ASTERISM", c:0, f:""},
-      {cp:0x221E, ch:"∞", n:"INFINITY", c:0, f:""},
-      {cp:0x2295, ch:"⊕", n:"CIRCLED PLUS", c:0, f:""},
-      {cp:0x2297, ch:"⊗", n:"CIRCLED TIMES", c:0, f:""},
-      {cp:0x2299, ch:"⊙", n:"CIRCLED DOT OPERATOR", c:0, f:""},
-      {cp:0x22EE, ch:"⋮", n:"VERTICAL ELLIPSIS", c:0, f:""},
-      {cp:0x22EF, ch:"⋯", n:"MIDLINE HORIZONTAL ELLIPSIS", c:0, f:""},
-      {cp:0x2B58, ch:"⭘", n:"HEAVY CIRCLE", c:0, f:""},
-      {cp:0x23F1, ch:"⏱", n:"STOPWATCH", c:0, f:""},
-      {cp:0x23F8, ch:"⏸", n:"DOUBLE VERTICAL BAR", c:0, f:""},
-      {cp:0x23F9, ch:"⏹", n:"BLACK SQUARE FOR STOP", c:0, f:""},
-      {cp:0x23FA, ch:"⏺", n:"BLACK CIRCLE FOR RECORD", c:0, f:""},
-      {cp:0x00A7, ch:"§", n:"SECTION SIGN", c:0, f:""},
-      {cp:0x00B6, ch:"¶", n:"PILCROW SIGN", c:0, f:""},
-      {cp:0x2039, ch:"‹", n:"SINGLE LEFT-POINTING ANGLE QUOTATION MARK", c:0, f:""},
-      {cp:0x203A, ch:"›", n:"SINGLE RIGHT-POINTING ANGLE QUOTATION MARK", c:0, f:""},
-      {cp:0x00AB, ch:"«", n:"LEFT-POINTING DOUBLE ANGLE QUOTATION MARK", c:0, f:""},
-      {cp:0x00BB, ch:"»", n:"RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK", c:0, f:""},
-      {cp:0x2022, ch:"•", n:"BULLET", c:0, f:""},
-      {cp:0x2219, ch:"∙", n:"BULLET OPERATOR", c:0, f:""},
-      {cp:0x22C5, ch:"⋅", n:"DOT OPERATOR", c:0, f:""},
-    ] },
-    { id:"emoji", label:"EMOJI — colour, always a substitution", note:"colour on the board costs a font switch: none of these are in the mono face", cells:[
-      {cp:0x1F34D, ch:"🍍", n:"PINEAPPLE", c:1, f:"Noto Color Emoji"},
-      {cp:0x1F34E, ch:"🍎", n:"RED APPLE", c:1, f:"Noto Color Emoji"},
-      {cp:0x1F347, ch:"🍇", n:"GRAPES", c:1, f:"Noto Color Emoji"},
-      {cp:0x1F40D, ch:"🐍", n:"SNAKE", c:1, f:"Noto Color Emoji"},
-      {cp:0x1F48E, ch:"💎", n:"GEM STONE", c:1, f:"Noto Color Emoji"},
-      {cp:0x1F4A5, ch:"💥", n:"COLLISION SYMBOL", c:1, f:"Noto Color Emoji"},
-      {cp:0x1F525, ch:"🔥", n:"FIRE", c:1, f:"Noto Color Emoji"},
-      {cp:0x1F47E, ch:"👾", n:"ALIEN MONSTER", c:1, f:"Noto Color Emoji"},
-      {cp:0x1F480, ch:"💀", n:"SKULL", c:1, f:"Noto Color Emoji"},
-      {cp:0x1F3AE, ch:"🎮", n:"VIDEO GAME", c:1, f:"Noto Color Emoji"},
-      {cp:0x1F300, ch:"🌀", n:"CYCLONE", c:1, f:"Noto Color Emoji"},
-      {cp:0x1F52B, ch:"🔫", n:"PISTOL", c:1, f:"Noto Color Emoji"},
-      {cp:0x1F6C1, ch:"🛁", n:"BATHTUB", c:1, f:"Noto Color Emoji"},
-    ] },
-    { id:"nerd", label:"NERD FONT — icons from JetBrainsMono NF", note:"private use: only JetBrainsMono Nerd Font has these; names are the font's own post table", cells:[
-      {cp:0xF04B, ch:"", n:"fa-play", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF04C, ch:"", n:"fa-pause", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF04D, ch:"", n:"fa-stop", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF11B, ch:"", n:"fa-gamepad", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF1B0, ch:"", n:"fa-paw", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF0E7, ch:"", n:"fa-flash", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF140, ch:"", n:"fa-bullseye", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF192, ch:"", n:"fa-dot_circle_o", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF21E, ch:"", n:"fa-heartbeat", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF185, ch:"", n:"fa-sun_o", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF06C, ch:"", n:"fa-leaf", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF188, ch:"", n:"fa-bug", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF0EB, ch:"", n:"fa-lightbulb_o", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF075, ch:"", n:"fa-comment", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF00C, ch:"", n:"fa-check", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF0C9, ch:"", n:"fa-reorder", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF0C0, ch:"", n:"fa-users", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF072, ch:"", n:"fa-plane", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xF074, ch:"", n:"fa-shuffle", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE71F, ch:"", n:"dev-ghost", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE795, ch:"", n:"dev-terminal", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xEA85, ch:"", n:"cod-terminal", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE227, ch:"", n:"fae-mushroom", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE22D, ch:"", n:"fae-pizza", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE251, ch:"", n:"fae-hotdog", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE24D, ch:"", n:"fae-hamburger", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE261, ch:"", n:"fae-chess_pawn", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE26E, ch:"", n:"fae-crown", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE27F, ch:"", n:"fae-atom", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE23A, ch:"", n:"fae-real_heart", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE370, ch:"", n:"weather-stars", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE3BF, ch:"", n:"weather-fire", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE658, ch:"", n:"seti-firefox", c:2, f:"JetBrainsMono Nerd Font"},
-      {cp:0xE73C, ch:"", n:"dev-python", c:2, f:"JetBrainsMono Nerd Font"},
-    ] },
-  ]
+  // Every candidate is absolute and spelled from a known anchor, because
+  // `Qt.resolvedUrl("./x")` resolves against the shell's cwd, not against this
+  // file — the shell spells even its icon paths `file:///usr/share/icons` for
+  // that reason, and `~/.config/omarchy/plugins` is a prefix the shell already
+  // spells in full (PluginRegistry.qml). The dev checkout's data/ folder and
+  // the installed plugin folder (which is what ./install.sh installs the
+  // checkout's data/ folder into) are therefore both named by construction;
+  // whichever candidate exists first wins, and no reader crashes while none
+  // does — the shelf-note line goes red and says what is wrong instead of
+  // painting an empty grid that looks like an empty game.
+  readonly property string catalogPath: {
+    var home = System.env("HOME") || ""
+    var xdgData = (System.env("XDG_DATA_HOME") || "").trim()
+    if (xdgData === "" || xdgData === "~" || xdgData.charAt(0) !== "/") xdgData = home + "/.local/share"
+    // The dev checkout's data/ folder comes first: that is the one this repo
+    // edits, so an edit to glyphs.json takes effect without an install run.
+    // An installed machine with an untouched checkout still finds the installed
+    // copy via the plugin-folder candidates — and those carry the $XDG_DATA_HOME
+    // and `~` fallbacks exactly like stateDir in Overlay.qml, because System.env
+    // really does answer "C:\Users\...".
+    var xdgConfig = (System.env("XDG_CONFIG_HOME") || "").trim()
+    if (xdgConfig === "" || xdgConfig === "~" || xdgConfig.charAt(0) !== "/") xdgConfig = home + "/.config"
+    var cands = [xdgData + "/tsnake/glyphs.json",
+                 xdgData + "/omarchy/plugins/io.github.londelo.tsnake/data/glyphs.json",
+                 xdgData + "/omarchy/plugin-data/io.github.londelo.tsnake/glyphs.json",
+                 xdgConfig + "/omarchy/plugins/io.github.londelo.tsnake/data/glyphs.json"]
+    for (var i = 0; i < cands.length; i++) if (catalogFile.exists(cands[i])) return cands[i]
+    return ""                                    // nothing found: loadCatalog says so
+  }
+  property var catalog: []                       // filled by catalogFile; [] = trustworthy-read failed
+  property string catalogError: ""
+
+  function loadCatalog() {
+    try {
+      // Shape-check before trusting it, the way snake.c's state_file_trustworthy
+      // guards the save files: right-shaped content or a graceful "no catalog",
+      // never a poisoned grid.
+      var t = catalogFile.text().trim()
+      if (t.length > 0 && t.length <= 262144) {
+        var c = JSON.parse(t)
+        if (Array.isArray(c) && c.length === 9 && c[0].id === "arrows") {
+          lab.catalog = c
+          lab.catalogError = ""
+        } else {
+          lab.catalog = []
+          lab.catalogError = "glyphs.json parsed, but is not the tsnake catalog"
+        }
+      } else {
+        lab.catalog = []
+        lab.catalogError = "glyphs.json is empty or too big to be the catalog"
+      }
+      previewCanvas.requestPaint()
+    } catch (e) {
+      lab.catalog = []
+      lab.catalogError = "glyphs.json is not valid JSON"
+    }
+  }
+
+  // Data, not code. c:0 native to the probe font, 1 fontconfig borrows it from
+  // family f (different width), 2 Nerd Font private use, 3 never probed. Never
+  // guess a cell's coverage: measure it, `fc-match "Adwaita Mono:charset=XXXX"`.
+  FileView {
+    id: catalogFile
+    path: lab.catalogPath
+    watchChanges: true
+    onLoaded: lab.loadCatalog()
+    onLoadFailed: {
+      lab.catalog = []
+      lab.catalogError = "glyphs.json missing — reinstall the plugin folder"
+    }
+    // Re-read on change (clock/Panel.qml's langFile): an installed copy that a
+    // re-run of install.sh replaces must repaint, not sit on the old table.
+    onFileChanged: reload()
+  }
 
   // ------------------------------------------------------------ the window
   FloatingWindow {
@@ -574,6 +341,10 @@ Item {
         width: parent.width
         spacing: Style.spacing.xs
 
+        // Array-as-model, not `model: lab.catalog`: an array assigned to a var
+        // property coerces to its LENGTH here (Ui/ButtonGroup.qml:105,
+        // clock/Panel.qml:613 — including the shell's own `model: 26`), which
+        // strands the delegates' modelData. An empty array means zero delegates.
         Repeater {
           model: lab.catalog
           delegate: Rectangle {
@@ -607,14 +378,12 @@ Item {
       }
 
       Text {
+        // LOUD on a missing/broken glyphs.json: it is the one line that can say so.
         textFormat: Text.PlainText
-        // currentFont, never the alias: "already in monospace" is a fontconfig
-        // *query*, and answering a coverage question with an alias hides which
-        // face the answer came from (here it resolves to Adwaita Mono).
-        // The verdicts are measured against probeFont, not against whatever chip
-        // is selected: switching the shelf to Noto Color Emoji does not change
-        // which glyphs Adwaita Mono has.
-        text: lab.catalog[lab.groupIndex].note
+        // currentFont, never the alias: an alias answer to a coverage question
+        // hides which face it came from. Verdicts are measured against probeFont.
+        text: lab.catalog.length === 0 ? lab.catalogError
+                                       : lab.catalog[lab.groupIndex].note
               + "  ·  green = in " + lab.probeFont
               + "  ·  amber = fontconfig borrows it from another face (different width)"
               + "  ·  blue = Nerd Font private use"
@@ -910,6 +679,15 @@ Item {
         }
         var ch = (event.text && event.text.length === 1) ? event.text : ""
         var k = event.key
+
+        // With no catalog loaded, a shelf move has nowhere to land, and an
+        // unguarded `% lab.catalog.length` would be `% 0` — NaN, which then
+        // poisons every lab.catalog[lab.groupIndex] reader below.
+        if (lab.catalog.length === 0 && (k === Qt.Key_Tab || k === Qt.Key_Right
+                                         || k === Qt.Key_Left || ch === "g")) {
+          event.accepted = true
+          return
+        }
 
         if (ch === "q" || k === Qt.Key_Escape) { lab.closeLab() }
         else if (ch === "c") lab.copySummary()
