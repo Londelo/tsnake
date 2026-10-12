@@ -1,5 +1,9 @@
-/* Headless test harness: #includes snake.c (with its main renamed out of
- * the way) and drives the auto-hunt AI with no terminal. `make test`. */
+/* LEGACY print-only harness: no CHECK macros, no verdict — a clean run is silence,
+ * not a pass (the 200-tick loop lets the rig steer a scarred, self-severing body
+ * for twenty blind ticks — interesting to watch, proof of nothing). `make test`
+ * still runs it; the real suite is test_game.c (`make unit`). #includes snake.c
+ * (main renamed) to reach the statics — that is also why snake.c must never
+ * compile as a second TU. */
 #define main snake_unused_main
 #include "snake.c"
 #undef main

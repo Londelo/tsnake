@@ -1,0 +1,1822 @@
+[
+ {
+  "id": "arrows",
+  "label": "ARROWS — steering, the head, hunt badges",
+  "note": "direction is the one thing the head must say out loud",
+  "cells": [
+   {
+    "cp": 8592,
+    "ch": "←",
+    "n": "LEFTWARDS ARROW",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8593,
+    "ch": "↑",
+    "n": "UPWARDS ARROW",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8594,
+    "ch": "→",
+    "n": "RIGHTWARDS ARROW",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8595,
+    "ch": "↓",
+    "n": "DOWNWARDS ARROW",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8656,
+    "ch": "⇐",
+    "n": "LEFTWARDS DOUBLE ARROW",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8657,
+    "ch": "⇑",
+    "n": "UPWARDS DOUBLE ARROW",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8658,
+    "ch": "⇒",
+    "n": "RIGHTWARDS DOUBLE ARROW",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8659,
+    "ch": "⇓",
+    "n": "DOWNWARDS DOUBLE ARROW",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10229,
+    "ch": "⟵",
+    "n": "LONG LEFTWARDS ARROW",
+    "c": 1,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 10230,
+    "ch": "⟶",
+    "n": "LONG RIGHTWARDS ARROW",
+    "c": 1,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 10231,
+    "ch": "⟷",
+    "n": "LONG LEFT RIGHT ARROW",
+    "c": 1,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 10232,
+    "ch": "⟸",
+    "n": "LONG LEFTWARDS DOUBLE ARROW",
+    "c": 1,
+    "f": "Adwaita Sans"
+   },
+   {
+    "cp": 10132,
+    "ch": "➔",
+    "n": "HEAVY WIDE-HEADED RIGHTWARDS ARROW",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10137,
+    "ch": "➙",
+    "n": "HEAVY RIGHTWARDS ARROW",
+    "c": 1,
+    "f": "Noto Sans Symbols 2"
+   },
+   {
+    "cp": 10139,
+    "ch": "➛",
+    "n": "DRAFTING POINT RIGHTWARDS ARROW",
+    "c": 1,
+    "f": "Noto Sans Math"
+   },
+   {
+    "cp": 10142,
+    "ch": "➞",
+    "n": "HEAVY TRIANGLE-HEADED RIGHTWARDS ARROW",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10146,
+    "ch": "➢",
+    "n": "THREE-D TOP-LIGHTED RIGHTWARDS ARROWHEAD",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10148,
+    "ch": "➤",
+    "n": "BLACK RIGHTWARDS ARROWHEAD",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10150,
+    "ch": "➦",
+    "n": "HEAVY BLACK CURVED UPWARDS AND RIGHTWARDS ARROW",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11154,
+    "ch": "⮒",
+    "n": "NEWLINE LEFT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11155,
+    "ch": "⮓",
+    "n": "NEWLINE RIGHT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11156,
+    "ch": "⮔",
+    "n": "FOUR CORNER ARROWS CIRCLING ANTICLOCKWISE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11157,
+    "ch": "⮕",
+    "n": "RIGHTWARDS BLACK ARROW",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11164,
+    "ch": "⮜",
+    "n": "BLACK LEFTWARDS EQUILATERAL ARROWHEAD",
+    "c": 1,
+    "f": "Noto Sans Symbols 2"
+   },
+   {
+    "cp": 11165,
+    "ch": "⮝",
+    "n": "BLACK UPWARDS EQUILATERAL ARROWHEAD",
+    "c": 1,
+    "f": "Noto Sans Symbols 2"
+   },
+   {
+    "cp": 10561,
+    "ch": "⥁",
+    "n": "CLOCKWISE CLOSED CIRCLE ARROW",
+    "c": 0,
+    "f": ""
+   }
+  ]
+ },
+ {
+  "id": "head",
+  "label": "HEAD SHAPES — triangles, corners, quadrants",
+  "note": "four of these, one per heading, replaces the terminal's ^ v < >",
+  "cells": [
+   {
+    "cp": 9650,
+    "ch": "▲",
+    "n": "BLACK UP-POINTING TRIANGLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9660,
+    "ch": "▼",
+    "n": "BLACK DOWN-POINTING TRIANGLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9654,
+    "ch": "▶",
+    "n": "BLACK RIGHT-POINTING TRIANGLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9664,
+    "ch": "◀",
+    "n": "BLACK LEFT-POINTING TRIANGLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9656,
+    "ch": "▸",
+    "n": "BLACK RIGHT-POINTING SMALL TRIANGLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9666,
+    "ch": "◂",
+    "n": "BLACK LEFT-POINTING SMALL TRIANGLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9658,
+    "ch": "►",
+    "n": "BLACK RIGHT-POINTING POINTER",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9668,
+    "ch": "◄",
+    "n": "BLACK LEFT-POINTING POINTER",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9700,
+    "ch": "◤",
+    "n": "BLACK UPPER LEFT TRIANGLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9701,
+    "ch": "◥",
+    "n": "BLACK UPPER RIGHT TRIANGLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9698,
+    "ch": "◢",
+    "n": "BLACK LOWER RIGHT TRIANGLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9699,
+    "ch": "◣",
+    "n": "BLACK LOWER LEFT TRIANGLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9712,
+    "ch": "◰",
+    "n": "WHITE SQUARE WITH UPPER LEFT QUADRANT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9713,
+    "ch": "◱",
+    "n": "WHITE SQUARE WITH LOWER LEFT QUADRANT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9714,
+    "ch": "◲",
+    "n": "WHITE SQUARE WITH LOWER RIGHT QUADRANT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9715,
+    "ch": "◳",
+    "n": "WHITE SQUARE WITH UPPER RIGHT QUADRANT",
+    "c": 0,
+    "f": ""
+   }
+  ]
+ },
+ {
+  "id": "blocks",
+  "label": "BLOCKS + DOTS — body segments",
+  "note": "the body is a solid cell today; these are the alternatives to a plain square",
+  "cells": [
+   {
+    "cp": 9608,
+    "ch": "█",
+    "n": "FULL BLOCK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9619,
+    "ch": "▓",
+    "n": "DARK SHADE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9618,
+    "ch": "▒",
+    "n": "MEDIUM SHADE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9617,
+    "ch": "░",
+    "n": "LIGHT SHADE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9600,
+    "ch": "▀",
+    "n": "UPPER HALF BLOCK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9604,
+    "ch": "▄",
+    "n": "LOWER HALF BLOCK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9615,
+    "ch": "▏",
+    "n": "LEFT ONE EIGHTH BLOCK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9612,
+    "ch": "▌",
+    "n": "LEFT HALF BLOCK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9611,
+    "ch": "▋",
+    "n": "LEFT FIVE EIGHTHS BLOCK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9632,
+    "ch": "■",
+    "n": "BLACK SQUARE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9633,
+    "ch": "□",
+    "n": "WHITE SQUARE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9642,
+    "ch": "▪",
+    "n": "BLACK SMALL SQUARE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9643,
+    "ch": "▫",
+    "n": "WHITE SMALL SQUARE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9636,
+    "ch": "▤",
+    "n": "SQUARE WITH HORIZONTAL FILL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9637,
+    "ch": "▥",
+    "n": "SQUARE WITH VERTICAL FILL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9638,
+    "ch": "▦",
+    "n": "SQUARE WITH ORTHOGONAL CROSSHATCH FILL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9679,
+    "ch": "●",
+    "n": "BLACK CIRCLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9675,
+    "ch": "○",
+    "n": "WHITE CIRCLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9673,
+    "ch": "◉",
+    "n": "FISHEYE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9678,
+    "ch": "◎",
+    "n": "BULLSEYE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9670,
+    "ch": "◆",
+    "n": "BLACK DIAMOND",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9671,
+    "ch": "◇",
+    "n": "WHITE DIAMOND",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9672,
+    "ch": "◈",
+    "n": "WHITE DIAMOND CONTAINING BLACK SMALL DIAMOND",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9680,
+    "ch": "◐",
+    "n": "CIRCLE WITH LEFT HALF BLACK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9681,
+    "ch": "◑",
+    "n": "CIRCLE WITH RIGHT HALF BLACK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9682,
+    "ch": "◒",
+    "n": "CIRCLE WITH LOWER HALF BLACK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9683,
+    "ch": "◓",
+    "n": "CIRCLE WITH UPPER HALF BLACK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9692,
+    "ch": "◜",
+    "n": "UPPER LEFT QUADRANT CIRCULAR ARC",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9693,
+    "ch": "◝",
+    "n": "UPPER RIGHT QUADRANT CIRCULAR ARC",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9694,
+    "ch": "◞",
+    "n": "LOWER RIGHT QUADRANT CIRCULAR ARC",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9695,
+    "ch": "◟",
+    "n": "LOWER LEFT QUADRANT CIRCULAR ARC",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9702,
+    "ch": "◦",
+    "n": "WHITE BULLET",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9707,
+    "ch": "◫",
+    "n": "WHITE SQUARE WITH VERTICAL BISECTING LINE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9646,
+    "ch": "▮",
+    "n": "BLACK VERTICAL RECTANGLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9647,
+    "ch": "▯",
+    "n": "WHITE VERTICAL RECTANGLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11035,
+    "ch": "⬛",
+    "n": "BLACK LARGE SQUARE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11036,
+    "ch": "⬜",
+    "n": "WHITE LARGE SQUARE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11041,
+    "ch": "⬡",
+    "n": "WHITE HEXAGON",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11042,
+    "ch": "⬢",
+    "n": "BLACK HEXAGON",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11043,
+    "ch": "⬣",
+    "n": "HORIZONTAL BLACK HEXAGON",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11044,
+    "ch": "⬤",
+    "n": "BLACK LARGE CIRCLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11045,
+    "ch": "⬥",
+    "n": "BLACK MEDIUM DIAMOND",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11046,
+    "ch": "⬦",
+    "n": "WHITE MEDIUM DIAMOND",
+    "c": 0,
+    "f": ""
+   }
+  ]
+ },
+ {
+  "id": "braille",
+  "label": "BRAILLE — dense 2x4 dot cells",
+  "note": "reads as texture at small cell sizes; U+2800 is the blank cell",
+  "cells": [
+   {
+    "cp": 10240,
+    "ch": "⠀",
+    "n": "BRAILLE PATTERN BLANK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10295,
+    "ch": "⠷",
+    "n": "BRAILLE PATTERN DOTS-12356",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10311,
+    "ch": "⡇",
+    "n": "BRAILLE PATTERN DOTS-1237",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10395,
+    "ch": "⢛",
+    "n": "BRAILLE PATTERN DOTS-12458",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10407,
+    "ch": "⢧",
+    "n": "BRAILLE PATTERN DOTS-12368",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10431,
+    "ch": "⢿",
+    "n": "BRAILLE PATTERN DOTS-1234568",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10495,
+    "ch": "⣿",
+    "n": "BRAILLE PATTERN DOTS-12345678",
+    "c": 0,
+    "f": ""
+   }
+  ]
+ },
+ {
+  "id": "box",
+  "label": "BOX DRAWING — borders, grid lines",
+  "note": "the border is painted today; these are how a glyph border would look",
+  "cells": [
+   {
+    "cp": 9472,
+    "ch": "─",
+    "n": "BOX DRAWINGS LIGHT HORIZONTAL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9473,
+    "ch": "━",
+    "n": "BOX DRAWINGS HEAVY HORIZONTAL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9474,
+    "ch": "│",
+    "n": "BOX DRAWINGS LIGHT VERTICAL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9475,
+    "ch": "┃",
+    "n": "BOX DRAWINGS HEAVY VERTICAL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9484,
+    "ch": "┌",
+    "n": "BOX DRAWINGS LIGHT DOWN AND RIGHT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9488,
+    "ch": "┐",
+    "n": "BOX DRAWINGS LIGHT DOWN AND LEFT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9492,
+    "ch": "└",
+    "n": "BOX DRAWINGS LIGHT UP AND RIGHT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9496,
+    "ch": "┘",
+    "n": "BOX DRAWINGS LIGHT UP AND LEFT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9487,
+    "ch": "┏",
+    "n": "BOX DRAWINGS HEAVY DOWN AND RIGHT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9491,
+    "ch": "┓",
+    "n": "BOX DRAWINGS HEAVY DOWN AND LEFT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9495,
+    "ch": "┗",
+    "n": "BOX DRAWINGS HEAVY UP AND RIGHT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9499,
+    "ch": "┛",
+    "n": "BOX DRAWINGS HEAVY UP AND LEFT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9500,
+    "ch": "├",
+    "n": "BOX DRAWINGS LIGHT VERTICAL AND RIGHT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9508,
+    "ch": "┤",
+    "n": "BOX DRAWINGS LIGHT VERTICAL AND LEFT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9516,
+    "ch": "┬",
+    "n": "BOX DRAWINGS LIGHT DOWN AND HORIZONTAL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9524,
+    "ch": "┴",
+    "n": "BOX DRAWINGS LIGHT UP AND HORIZONTAL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9532,
+    "ch": "┼",
+    "n": "BOX DRAWINGS LIGHT VERTICAL AND HORIZONTAL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9548,
+    "ch": "╌",
+    "n": "BOX DRAWINGS LIGHT DOUBLE DASH HORIZONTAL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9549,
+    "ch": "╍",
+    "n": "BOX DRAWINGS HEAVY DOUBLE DASH HORIZONTAL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9552,
+    "ch": "═",
+    "n": "BOX DRAWINGS DOUBLE HORIZONTAL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9553,
+    "ch": "║",
+    "n": "BOX DRAWINGS DOUBLE VERTICAL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9478,
+    "ch": "┆",
+    "n": "BOX DRAWINGS LIGHT TRIPLE DASH VERTICAL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9480,
+    "ch": "┈",
+    "n": "BOX DRAWINGS LIGHT QUADRUPLE DASH HORIZONTAL",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9482,
+    "ch": "┊",
+    "n": "BOX DRAWINGS LIGHT QUADRUPLE DASH VERTICAL",
+    "c": 0,
+    "f": ""
+   }
+  ]
+ },
+ {
+  "id": "dingbats",
+  "label": "DINGBATS — food tokens, sparks",
+  "note": "stars, snowflakes, scissors: the stylish token shelf",
+  "cells": [
+   {
+    "cp": 9733,
+    "ch": "★",
+    "n": "BLACK STAR",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9734,
+    "ch": "☆",
+    "n": "WHITE STAR",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10035,
+    "ch": "✳",
+    "n": "EIGHT SPOKED ASTERISK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10036,
+    "ch": "✴",
+    "n": "EIGHT POINTED BLACK STAR",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10038,
+    "ch": "✶",
+    "n": "SIX POINTED BLACK STAR",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10041,
+    "ch": "✹",
+    "n": "TWELVE POINTED BLACK STAR",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10043,
+    "ch": "✻",
+    "n": "TEARDROP-SPOKED ASTERISK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10044,
+    "ch": "✼",
+    "n": "OPEN CENTRE TEARDROP-SPOKED ASTERISK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10046,
+    "ch": "✾",
+    "n": "SIX PETALLED BLACK AND WHITE FLORETTE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10047,
+    "ch": "✿",
+    "n": "BLACK FLORETTE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10048,
+    "ch": "❀",
+    "n": "WHITE FLORETTE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10049,
+    "ch": "❁",
+    "n": "EIGHT PETALLED OUTLINED BLACK FLORETTE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10050,
+    "ch": "❂",
+    "n": "CIRCLED OPEN CENTRE EIGHT POINTED STAR",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10054,
+    "ch": "❆",
+    "n": "HEAVY CHEVRON SNOWFLAKE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10056,
+    "ch": "❈",
+    "n": "HEAVY SPARKLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10057,
+    "ch": "❉",
+    "n": "BALLOON-SPOKED ASTERISK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10059,
+    "ch": "❋",
+    "n": "HEAVY EIGHT TEARDROP-SPOKED PROPELLER ASTERISK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10061,
+    "ch": "❍",
+    "n": "SHADOWED WHITE CIRCLE",
+    "c": 1,
+    "f": "Noto Sans Symbols 2"
+   },
+   {
+    "cp": 10063,
+    "ch": "❏",
+    "n": "LOWER RIGHT DROP-SHADOWED WHITE SQUARE",
+    "c": 1,
+    "f": "Noto Sans Symbols 2"
+   },
+   {
+    "cp": 10064,
+    "ch": "❐",
+    "n": "UPPER RIGHT DROP-SHADOWED WHITE SQUARE",
+    "c": 1,
+    "f": "Noto Sans Symbols 2"
+   },
+   {
+    "cp": 10065,
+    "ch": "❑",
+    "n": "LOWER RIGHT SHADOWED WHITE SQUARE",
+    "c": 1,
+    "f": "Noto Sans Symbols 2"
+   },
+   {
+    "cp": 10066,
+    "ch": "❒",
+    "n": "UPPER RIGHT SHADOWED WHITE SQUARE",
+    "c": 1,
+    "f": "Noto Sans Symbols 2"
+   },
+   {
+    "cp": 10070,
+    "ch": "❖",
+    "n": "BLACK DIAMOND MINUS WHITE X",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10072,
+    "ch": "❘",
+    "n": "LIGHT VERTICAL BAR",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10074,
+    "ch": "❚",
+    "n": "HEAVY VERTICAL BAR",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10016,
+    "ch": "✠",
+    "n": "MALTESE CROSS",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10010,
+    "ch": "✚",
+    "n": "HEAVY GREEK CROSS",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10011,
+    "ch": "✛",
+    "n": "OPEN CENTRE CROSS",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10012,
+    "ch": "✜",
+    "n": "HEAVY OPEN CENTRE CROSS",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10013,
+    "ch": "✝",
+    "n": "LATIN CROSS",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10014,
+    "ch": "✞",
+    "n": "SHADOWED WHITE LATIN CROSS",
+    "c": 1,
+    "f": "Noto Sans Symbols"
+   },
+   {
+    "cp": 10015,
+    "ch": "✟",
+    "n": "OUTLINED LATIN CROSS",
+    "c": 1,
+    "f": "Noto Sans Symbols"
+   },
+   {
+    "cp": 10060,
+    "ch": "❌",
+    "n": "CROSS MARK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10062,
+    "ch": "❎",
+    "n": "NEGATIVE SQUARED CROSS MARK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 10071,
+    "ch": "❗",
+    "n": "HEAVY EXCLAMATION MARK SYMBOL",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   }
+  ]
+ },
+ {
+  "id": "misc",
+  "label": "MISC SYMBOLS — suits, badges, status",
+  "note": "cards, music, weather, checks: HUD and status-label material",
+  "cells": [
+   {
+    "cp": 9760,
+    "ch": "☠",
+    "n": "SKULL AND CROSSBONES",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 9762,
+    "ch": "☢",
+    "n": "RADIOACTIVE SIGN",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 9763,
+    "ch": "☣",
+    "n": "BIOHAZARD SIGN",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 9786,
+    "ch": "☺",
+    "n": "WHITE SMILING FACE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9785,
+    "ch": "☹",
+    "n": "WHITE FROWNING FACE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9824,
+    "ch": "♠",
+    "n": "BLACK SPADE SUIT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9827,
+    "ch": "♣",
+    "n": "BLACK CLUB SUIT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9829,
+    "ch": "♥",
+    "n": "BLACK HEART SUIT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9830,
+    "ch": "♦",
+    "n": "BLACK DIAMOND SUIT",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9834,
+    "ch": "♪",
+    "n": "EIGHTH NOTE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9837,
+    "ch": "♭",
+    "n": "MUSIC FLAT SIGN",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9839,
+    "ch": "♯",
+    "n": "MUSIC SHARP SIGN",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9873,
+    "ch": "⚑",
+    "n": "BLACK FLAG",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9875,
+    "ch": "⚓",
+    "n": "ANCHOR",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 9878,
+    "ch": "⚖",
+    "n": "SCALES",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 9881,
+    "ch": "⚙",
+    "n": "GEAR",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9888,
+    "ch": "⚠",
+    "n": "WARNING SIGN",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9889,
+    "ch": "⚡",
+    "n": "HIGH VOLTAGE SIGN",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9904,
+    "ch": "⚰",
+    "n": "COFFIN",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 9917,
+    "ch": "⚽",
+    "n": "SOCCER BALL",
+    "c": 1,
+    "f": "Noto Sans Mono CJK KR"
+   },
+   {
+    "cp": 9918,
+    "ch": "⚾",
+    "n": "BASEBALL",
+    "c": 1,
+    "f": "Noto Sans Mono CJK KR"
+   },
+   {
+    "cp": 9924,
+    "ch": "⛄",
+    "n": "SNOWMAN WITHOUT SNOW",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 9935,
+    "ch": "⛏",
+    "n": "PICK",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 9939,
+    "ch": "⛓",
+    "n": "CHAINS",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 9940,
+    "ch": "⛔",
+    "n": "NO ENTRY",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 9970,
+    "ch": "⛲",
+    "n": "FOUNTAIN",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 9977,
+    "ch": "⛹",
+    "n": "PERSON WITH BALL",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 9981,
+    "ch": "⛽",
+    "n": "FUEL PUMP",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 8224,
+    "ch": "†",
+    "n": "DAGGER",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8225,
+    "ch": "‡",
+    "n": "DOUBLE DAGGER",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8252,
+    "ch": "‼",
+    "n": "DOUBLE EXCLAMATION MARK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8265,
+    "ch": "⁉",
+    "n": "EXCLAMATION QUESTION MARK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8258,
+    "ch": "⁂",
+    "n": "ASTERISM",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8734,
+    "ch": "∞",
+    "n": "INFINITY",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8853,
+    "ch": "⊕",
+    "n": "CIRCLED PLUS",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8855,
+    "ch": "⊗",
+    "n": "CIRCLED TIMES",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8857,
+    "ch": "⊙",
+    "n": "CIRCLED DOT OPERATOR",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8942,
+    "ch": "⋮",
+    "n": "VERTICAL ELLIPSIS",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8943,
+    "ch": "⋯",
+    "n": "MIDLINE HORIZONTAL ELLIPSIS",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 11096,
+    "ch": "⭘",
+    "n": "HEAVY CIRCLE",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9201,
+    "ch": "⏱",
+    "n": "STOPWATCH",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9208,
+    "ch": "⏸",
+    "n": "DOUBLE VERTICAL BAR",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9209,
+    "ch": "⏹",
+    "n": "BLACK SQUARE FOR STOP",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 9210,
+    "ch": "⏺",
+    "n": "BLACK CIRCLE FOR RECORD",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 167,
+    "ch": "§",
+    "n": "SECTION SIGN",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 182,
+    "ch": "¶",
+    "n": "PILCROW SIGN",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8249,
+    "ch": "‹",
+    "n": "SINGLE LEFT-POINTING ANGLE QUOTATION MARK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8250,
+    "ch": "›",
+    "n": "SINGLE RIGHT-POINTING ANGLE QUOTATION MARK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 171,
+    "ch": "«",
+    "n": "LEFT-POINTING DOUBLE ANGLE QUOTATION MARK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 187,
+    "ch": "»",
+    "n": "RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8226,
+    "ch": "•",
+    "n": "BULLET",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8729,
+    "ch": "∙",
+    "n": "BULLET OPERATOR",
+    "c": 0,
+    "f": ""
+   },
+   {
+    "cp": 8901,
+    "ch": "⋅",
+    "n": "DOT OPERATOR",
+    "c": 0,
+    "f": ""
+   }
+  ]
+ },
+ {
+  "id": "emoji",
+  "label": "EMOJI — colour, always a substitution",
+  "note": "colour on the board costs a font switch: none of these are in the mono face",
+  "cells": [
+   {
+    "cp": 127821,
+    "ch": "🍍",
+    "n": "PINEAPPLE",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 127822,
+    "ch": "🍎",
+    "n": "RED APPLE",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 127815,
+    "ch": "🍇",
+    "n": "GRAPES",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 128013,
+    "ch": "🐍",
+    "n": "SNAKE",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 128142,
+    "ch": "💎",
+    "n": "GEM STONE",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 128165,
+    "ch": "💥",
+    "n": "COLLISION SYMBOL",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 128293,
+    "ch": "🔥",
+    "n": "FIRE",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 128126,
+    "ch": "👾",
+    "n": "ALIEN MONSTER",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 128128,
+    "ch": "💀",
+    "n": "SKULL",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 127918,
+    "ch": "🎮",
+    "n": "VIDEO GAME",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 127744,
+    "ch": "🌀",
+    "n": "CYCLONE",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 128299,
+    "ch": "🔫",
+    "n": "PISTOL",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   },
+   {
+    "cp": 128705,
+    "ch": "🛁",
+    "n": "BATHTUB",
+    "c": 1,
+    "f": "Noto Color Emoji"
+   }
+  ]
+ },
+ {
+  "id": "nerd",
+  "label": "NERD FONT — icons from JetBrainsMono NF",
+  "note": "private use: only JetBrainsMono Nerd Font has these; names are the font's own post table",
+  "cells": [
+   {
+    "cp": 61515,
+    "ch": "",
+    "n": "fa-play",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61516,
+    "ch": "",
+    "n": "fa-pause",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61517,
+    "ch": "",
+    "n": "fa-stop",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61723,
+    "ch": "",
+    "n": "fa-gamepad",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61872,
+    "ch": "",
+    "n": "fa-paw",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61671,
+    "ch": "",
+    "n": "fa-flash",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61760,
+    "ch": "",
+    "n": "fa-bullseye",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61842,
+    "ch": "",
+    "n": "fa-dot_circle_o",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61982,
+    "ch": "",
+    "n": "fa-heartbeat",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61829,
+    "ch": "",
+    "n": "fa-sun_o",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61548,
+    "ch": "",
+    "n": "fa-leaf",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61832,
+    "ch": "",
+    "n": "fa-bug",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61675,
+    "ch": "",
+    "n": "fa-lightbulb_o",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61557,
+    "ch": "",
+    "n": "fa-comment",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61452,
+    "ch": "",
+    "n": "fa-check",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61641,
+    "ch": "",
+    "n": "fa-reorder",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61632,
+    "ch": "",
+    "n": "fa-users",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61554,
+    "ch": "",
+    "n": "fa-plane",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 61556,
+    "ch": "",
+    "n": "fa-shuffle",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 59167,
+    "ch": "",
+    "n": "dev-ghost",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 59285,
+    "ch": "",
+    "n": "dev-terminal",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 60037,
+    "ch": "",
+    "n": "cod-terminal",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 57895,
+    "ch": "",
+    "n": "fae-mushroom",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 57901,
+    "ch": "",
+    "n": "fae-pizza",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 57937,
+    "ch": "",
+    "n": "fae-hotdog",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 57933,
+    "ch": "",
+    "n": "fae-hamburger",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 57953,
+    "ch": "",
+    "n": "fae-chess_pawn",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 57966,
+    "ch": "",
+    "n": "fae-crown",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 57983,
+    "ch": "",
+    "n": "fae-atom",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 57914,
+    "ch": "",
+    "n": "fae-real_heart",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 58224,
+    "ch": "",
+    "n": "weather-stars",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 58303,
+    "ch": "",
+    "n": "weather-fire",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 58968,
+    "ch": "",
+    "n": "seti-firefox",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   },
+   {
+    "cp": 59196,
+    "ch": "",
+    "n": "dev-python",
+    "c": 2,
+    "f": "JetBrainsMono Nerd Font"
+   }
+  ]
+ }
+]

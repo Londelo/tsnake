@@ -5,9 +5,10 @@ test_game
 *.o
 .tsnake_highscore
 .tsnake_setup
-# The overlay's face keeps its two files and its engine INSIDE the plugin folder, so that
-# `omarchy plugin remove` erases the whole footprint. When the card is loaded straight from
-# this checkout that means they land here (the engine binary `snake`, already ignored above),
-# and they are player history, not source.
-/highscore
-/setup
+# The terminal face's two files, relative to $HOME (~/.tsnake_highscore, ~/.tsnake_setup),
+# which is also where they land if this checkout is ever someone's HOME. Player history, not
+# source. The overlay's pair is not listed because it cannot appear here any more: the overlay
+# names its engine's files under $XDG_STATE_HOME/tsnake, out of reach of the shell's plugin
+# watcher — which is the price of a record that survives a reinstall. ./uninstall.sh is the
+# command that erases them, deliberately; `omarchy plugin remove` cannot (no host hook, no
+# manifest field), and that is the host's own convention rather than a leak.

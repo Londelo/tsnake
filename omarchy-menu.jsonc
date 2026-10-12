@@ -1,0 +1,46 @@
+{
+  // How the Omarchy menu learns about tsnake, and why this file has to be INSTALLED rather than
+  // simply shipped. Measured on this machine, every claim below:
+  //
+  //  * Menu.qml:51 resolves `menuData: menuProviders.concat(commandProviders).concat(providerMenu)
+  //    .concat(providerCommands)` and :382 hands the whole string to
+  //    `Quickshell.spawn.sync("bash", ["-c", menuData ? menuData : "echo \"{}\""], {mergeEnvironment: true})`.
+  //    So the entries the menu offers are a CONCATENATION of four sources, and anything this
+  //    bundle declares is appended after the global catalogue rather than replacing it.
+  //  * A plugin-bundled copy is still not enough on its own. `defaultMenuPath` (:52) and
+  //    `userMenuPath` (:51) both point at files named omarchy-menu.jsonc OUTSIDE the plugin
+  //    folder — $XDG_CONFIG_HOME/omarchy/{default,extensions}/ — and the one this machine has
+  //    holds nothing but commented-out examples. So the row below needs a live copy in
+  //    ~/.config/omarchy/extensions/ as well, which is what install.sh now puts there (a
+  //    .orig copy of whatever was there first goes beside it).
+  //  * Quickshell has no `parse-args` subcommand here (it rejects the word with exit 109), so
+  //    nothing can ask the menu's own parser whether a file is good. That is why the shape test
+  //    in install.sh works by handing the whole wrapped document to jq and reading the OUTPUT.
+  //
+  // The `action` string is run by `bash -c` with NO pty and no terminal — `Process` never
+  // consults `mergeEnvironment` (:1033) and neither does `spawn.sync` — so whatever it launches
+  // inherits an empty environment and a non-tty stdin, and `uninstall.sh -i` exists because of
+  // that. The leading `cd` and the absolute path are the host's own shape (default file :290,
+  // and :1125 for the one destructive row).
+
+  // A game that runs inside an overlay window is a game, so it sits where Steam, RetroArch,
+  // Minecraft and Lutris sit. Both keys are declared: "remove.gaming" already exists in the
+  // global file with this exact shape, so re-declaring it costs nothing, and on a machine whose
+  // extensions file is missing or empty it is what gives the tsnake row a submenu to live in.
+  //
+  // `when` is evaluated per ROW (Menu.qml:1085-1087), so the row below exists exactly while
+  // tsnake does and says nothing at all otherwise — no dead row after a removal.
+  "remove.gaming": {"icon":"","label":"Gaming","title":"Remove"},
+  "remove.gaming.tsnake": {
+    "icon":"",
+    "label":"tsnake",
+    "description": "Remove the tsnake overlay and erase its high score and card settings",
+    // Not the folder: `omarchy-plugin-remove` renames a plain folder instead of deleting it, so
+    // a .<id>.bak.<timestamp> is left behind in exactly the place this would otherwise test.
+    "when": "[[ -f $HOME/.config/omarchy/plugins/io.github.londelo.tsnake/Overlay.qml ]]",
+    // -i = ask as a plain y/N, since there is no terminal for gum's picker to draw on and no
+    // --stdin flag to feed it an answer through. `|| exit 1` because `set -euo pipefail` makes a
+    // refused answer exit 0. Nothing deletes unless the answer is y.
+    "action": "cd \"$HOME/.config/omarchy/plugins/io.github.londelo.tsnake\" && ./uninstall.sh -i || exit 1"
+  }
+}

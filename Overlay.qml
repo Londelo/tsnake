@@ -4,19 +4,23 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
-// tsnake overlay: the front-end for `snake --protocol`, the same game the
-// terminal build plays with the curses face swapped out for this window.
+// tsnake overlay: the front-end for `snake --protocol` — the same game the
+// terminal build plays, with the curses face swapped for this window. The engine
+// goes DOWN before it goes UP: a hidden panel unloads its item and kills its
+// Process, so `shown` alone can leave the last engine's last frame still painting.
 //
-// Surface/lifecycle shape taken from /usr/share/omarchy/shell/plugins/emojis/
-// Emojis.qml: the host injects shell/manifest and drives open()/close()/
-// dismiss()/toggle().
+// Letter shortcuts must match `event.text`, not Qt.Key_<letter>: this QML's Qt
+// object has no Key_h member (that is why `h`/`p`/`r`/`q` read event.text; Shift+h
+// arrives as "H" and matches nothing).
 //
-// The surface itself is shaped like the first-party dev gallery's
-// FloatingWindow (plugins/dev-gallery/GalleryPanel.qml:277): a real window
-// hyprland manages — movable, resizable, tileable, decorated — rather than the
-// unmanaged layer-shell slab it started as. Keyboard focus is ordinary window
-// focus now, not a layer-shell exclusive grab, so the shell keeps its keys and
-// the game gets them the way any other client does.
+// Quickshell 0.3.1 SplitParser/Process traps: splitMarker counts BYTES and flushes
+// on "\n"; clearOnExit defaults to TRUE (this file's last-frame path is covered by
+// stopEngine() + killTimer, and no first-party QML sets it false); there is no
+// flush()/waitForFinished(), so a restart() mid-run would orphan the old engine.
+//
+// Shape from plugins/emojis/Emojis.qml (host-injected shell/manifest) and
+// dev-gallery/GalleryPanel.qml:277 — a FloatingWindow, i.e. a real hyprland-managed
+// toplevel: movable, resizable, tileable, decorated; ordinary window focus.
 Item {
   id: root
 
@@ -72,56 +76,97 @@ Item {
   // of its em, so this is where it finally touches the cell it lives in.
   readonly property var glyphScale: ({ body: 1.18, corpse: 1.18, food: 1.05, head: 1.0 })
 
-  // ---------------------------------------------------------- state paths
-  // Everything this plugin owns — the record, the card's settings, and the engine
-  // binary itself — lives in the plugin's OWN folder, so `omarchy plugin remove` takes
-  // the whole footprint with it: uninstall and there is nothing left of tsnake. QML
-  // writes none of it; the engine is the only writer and QML only hands it the paths.
-  //
   // The plugin's own folder, resolved from where THIS file actually is — not a
   // hardcoded path, because the same item gets loaded out of a clone, a symlink or the
   // dev checkout. Qt.resolvedUrl(".") is a file:// URL ending in "/".
+  // Used for ONE thing only: finding the engine binary. Nothing that gets written lives
+  // here — see stateDir.
   readonly property string pluginDir: {
     var u = String(Qt.resolvedUrl("."))
     if (u.lastIndexOf("file://", 0) === 0) u = u.slice(7)
     if (u.endsWith("/")) u = u.slice(0, -1)
     return u
   }
-  readonly property string stateFile: pluginDir + "/highscore"
+
+  // ---------------------------------------------------------- state paths
+  // The record and the card's two answers live under the XDG state root, in a folder of
+  // their own: `$XDG_STATE_HOME/tsnake`, else `~/.local/state/tsnake`. QML only hands the
+  // engine these two paths on argv and writes no file at all (no Settings object either):
+  // the engine is the only writer, and it writes the INSTANT the number is beaten or the
+  // card changes — save_highscore()/save_setup() in snake.c. The engine also mkdir -p's the
+  // parent chain (ensure_parent_dir), so a fresh machine needs nothing from QML.
+  //
+  // Being OUTSIDE ~/.config/omarchy/plugins is the entire point of this block. The shell
+  // inotify-watches that whole tree for close_write/create/delete/move
+  // (PluginRegistry.qml:663) and reloads every plugin on any change to a NON-hidden path,
+  // and localPluginIdForPath treats only a LEADING "." on the top-level entry as hidden
+  // (:735) — a nested dot-file hides nothing. So a save inside the watched folder is a
+  // panel reload during play: the game dies under the player because they ate something.
+  // That single constraint is why the engine used to BANK both saves and write them once,
+  // on the way out — and the way out never arrives. `hide()` unmounts this item and
+  // Quickshell 0.3.1's Process destructor SIGKILLs the running child with the
+  // `flush`+`quit` write still buffered inside QProcess; that API offers exec, signal and
+  // write, and has no flush, no closeStdin, no terminatedType to wait for. Measured
+  // against the installed engine: quit/SIGTERM/EOF wrote the files, kill -9 and plain
+  // abandonment wrote nothing — so in the only configuration that mattered, banking saved
+  // nothing, ever. "The record hits disk the moment it is beaten" cannot be honored by a
+  // file somebody is watching, so the files moved.
+  //
+  // The price, said out loud: `omarchy plugin remove` only ever deletes
+  // $PLUGINS_DIR/$id (bin/omarchy-plugin-remove:10,:71), so an uninstall now leaves
+  // ~/.local/state/tsnake standing. Player history outranks a spotless uninstall.
+  //
+  // And there is deliberately NO fallback to the plugin folder for these two files, in
+  // either direction: one home for the record, or a card that reads one number and writes
+  // another.
+  readonly property string stateDir: {
+    var s = String(Quickshell.env("XDG_STATE_HOME") || "")
+    if (s === "") s = String(Quickshell.env("HOME") || "") + "/.local/state"
+    while (s.endsWith("/")) s = s.slice(0, -1)
+    return s + "/tsnake"
+  }
+  readonly property string stateFile: stateDir + "/highscore"
   // The card's own two answers (wrap, tick_ms) live beside the record, and the ENGINE
   // reads and writes them — this file never does. That is why the card needs no Settings
   // object: it paints wrap and speed out of frames, and the engine loads the saved ones
   // before its first frame exists, so what you left is what comes back.
-  readonly property string setupFile: pluginDir + "/setup"
-  // Living in the watched folder is a real price, and it is paid on purpose: the shell
-  // inotify-watches ~/.config/omarchy/plugins for close_write/create/delete/move
-  // (PluginRegistry.qml:663) and reloads every plugin on any change to a NON-hidden path
-  // (localPluginIdForPath skips a leading ".", :735; shell.qml:1476 → reloadPlugins), so
-  // a write during play would tear this window down under the player. That is why the
-  // engine BANKS its saves and writes them once, at the end of a run — see
-  // save_highscore() in snake.c. Two consequences to keep in mind: never `make` into this
-  // folder while a game is up, and the state dir is a place the player might not think to
-  // back up.
-  //
-  // There is deliberately NO fallback to the old ~/.local/state/tsnake location. It used to
-  // be a candidate, and it was cut for two reasons: a footprint the uninstaller never
-  // touches is exactly what this move is meant to end, and exec'ing an engine that outlived
-  // its own folder is how a card ends up running the previous binary from a deleted inode.
-  // If this folder has no `snake`, the card must say so — not quietly play somewhere else.
+  readonly property string setupFile: stateDir + "/setup"
+  // Both empty only on a machine with neither XDG_STATE_HOME nor HOME, where there is no
+  // sane absolute path to name. Then pass nothing and let the engine use its own defaults
+  // rather than hand it "/.local/state/…", a root it could never mkdir.
+  // A root-ish state root means the environment was pathological (a menu row runs
+  // with an empty env — see uninstall.sh); pass nothing rather than "/.local/state".
+  // Full story: docs/decisions.md.
+  readonly property bool stateUsable: stateDir.length > 1 && stateDir !== "/tsnake"
 
-  // Engine binary resolution order: an explicit TSNAKE_BIN (debugging), the copy installed
-  // WITH the plugin, then the dev build. Stage one is one machine; the hardcoded dev path is
-  // the one path here that is Brodie's rather than the plugin's.
+  // Engine binary resolution order: an explicit TSNAKE_BIN (debugging), then the copy
+  // installed WITH the plugin (install.sh builds snake into the plugin folder), then the
+  // auto-built binary in the state root (buildProc below). Nothing here names a personal
+  // checkout: a marketplace clone has no dev build beside it, and an absolute path to
+  // one machine's home folder is litter on every other machine.
   property int engineIndex: 0
   property bool engineFailed: false
   property var engineStderr: []
+
+  // ------------------------------------------------------- auto-install
+  // A marketplace `plugin add` clones, validates, places — and runs NOTHING. Measured:
+  // omarchy-plugin-enable spawns no code, PluginRegistry.qml spawns no code, and there
+  // is no lifecycle hook anywhere under /usr/share/omarchy. The only code a plugin can
+  // run on its own is its own QML, so the first summon builds the engine itself. The
+  // build lands in the STATE ROOT, never in the watched plugin folder: a create event
+  // there reloads the panel mid-build, and folder churn under a running shell poisons
+  // its type index (see the scar tissue above). `make` is idempotent — when the binary
+  // is current it exits in milliseconds; after a `plugin update` (which reset --hard's
+  // the source) the next summon rebuilds, so a stale binary never outlives its source.
+  readonly property string buildDir: stateUsable ? stateDir + "/build" : ""
+  readonly property string buildTarget: buildDir === "" ? "" : buildDir + "/snake"
 
   function engineCandidates() {
     var out = []
     var envBin = String(Quickshell.env("TSNAKE_BIN") || "")
     if (envBin !== "") out.push(envBin)
     out.push(root.pluginDir + "/snake")
-    out.push("/home/londelo/CastleLondelo/projects/tsnake/snake")
+    if (root.buildTarget !== "") out.push(root.buildTarget)
     return out
   }
 
@@ -315,7 +360,12 @@ Item {
     root.gotFrame = false
     root.engineIndex = 0
     root.clearFrame()
-    root.launchCandidate()
+    // Build first, launch after: with a current binary `make` is a no-op that exits
+    // in milliseconds, and the launch happens in buildProc's onExited. No state root
+    // to build in, or a build already running? Go straight to (or wait on) the
+    // candidates.
+    if (root.buildDir !== "" && !buildProc.running) buildProc.running = true
+    else if (!buildProc.running) root.launchCandidate()
   }
 
   function launchCandidate() {
@@ -325,15 +375,18 @@ Item {
       root.launchPending = false
       return
     }
-    engineProc.command = [cands[root.engineIndex], "--protocol", "--square-cells",
-                          "--state", root.stateFile, "--setup", root.setupFile]
+    var argv = [cands[root.engineIndex], "--protocol", "--square-cells"]
+    // The engine's two files, named by the one side that knows where the state root is
+    // (see stateDir). The engine does the reading and the writing; this is only argv.
+    if (root.stateUsable) argv = argv.concat(["--state", root.stateFile, "--setup", root.setupFile])
+    engineProc.command = argv
     root.launchPending = true
     engineProc.running = true
     startWatchdog.restart()
   }
 
   // A failed attempt: take down whatever is up, try the next candidate, and
-  // once the list is dry the overlay tells the player to run `make`. The
+  // once the list is dry the overlay says so and names what it tried. The
   // relaunch goes through callLater so it never runs inside the dying
   // process's own handler.
   function attemptFailed() {
@@ -360,12 +413,12 @@ Item {
     root.launchPending = false
     startWatchdog.stop()
     if (!engineProc.running) return
-    // Order is load-bearing, not cosmetic. By the time this runs the surface is
-    // already down (close()/dismiss() set opened=false FIRST), because the
-    // shell's teardown rebuilds this Loader: a save that landed while the board
-    // was visible would destroy the game under the player's eyes, and a save on
-    // death would reset the game-over panel mid-display. Then flush, then quit,
-    // then kill as the backstop.
+    // Order is load-bearing, not cosmetic: close()/dismiss() set opened=false FIRST, so by
+    // the time this runs the surface is down and the shell is free to tear this Loader
+    // apart. Nothing in this pair is a save any more — the engine put the record on disk
+    // the moment it was beaten and the card the moment it changed (snake.c:save_highscore,
+    // save_setup) — it only asks the child to exit politely. killTimer is what fires when
+    // the polite answer never arrives, and losing it costs nothing now.
     engineProc.write("{\"cmd\":\"flush\"}\n{\"cmd\":\"quit\"}\n")
     killTimer.restart()
   }
@@ -520,9 +573,10 @@ Item {
     // stopEngine BEFORE hide, not after it. With `keepLoaded: false` the host's
     // hide() tears this whole item down, so the call that followed it landed on
     // a dead object: "TypeError: Property 'stopEngine' ... is not a function",
-    // logged by Quickshell against this file. The run still got saved — the
-    // Process destructor closes the pipe and the engine banks on EOF — but the
-    // deliberate flush+quit never ran.
+    // logged by Quickshell against this file. That bug was invisible for the same
+    // reason the save itself was: nothing was riding on this call any more, because
+    // the engine writes as it plays (snake.c:save_highscore) instead of waiting to be
+    // asked on the way out — the destructor's SIGKILL used to arrive holding the run.
     root.stopEngine()
     if (root.shell && typeof root.shell.hide === "function")
       root.shell.hide((root.manifest && root.manifest.id) || root.pluginId)
@@ -563,6 +617,37 @@ Item {
     onExited: root.onEngineExited()
   }
 
+  // One-shot build for the auto-install above. `cp -u` keeps the sources in buildDir
+  // honest — make compares timestamps, and without the copy an updated snake.c in the
+  // plugin folder could look older than a stale binary. A failed build is not fatal:
+  // the candidate list still gets its turn, and the failure card speaks only when
+  // every candidate is dry (build stderr rides along to say why).
+  Process {
+    id: buildProc
+    running: false
+    command: ["bash", "-c",
+      "mkdir -p '" + root.buildDir + "' && cp -u '" + root.pluginDir + "/snake.c' '" +
+      root.pluginDir + "/Makefile' '" + root.buildDir + "'/ && make -C '" +
+      root.buildDir + "' snake"]
+
+    stderr: SplitParser {
+      splitMarker: "\n"
+      onRead: function(line) {
+        var t = String(line).trim()
+        if (t === "") return
+        var next = root.engineStderr.slice(-4)
+        next.push(t)
+        root.engineStderr = next
+      }
+    }
+
+    onExited: {
+      // Summoned but not yet playing ⇒ the build was the prelude and the engine is
+      // next. If the window closed while make ran, this returns without launching.
+      if (root.opened && !root.gotFrame) root.launchCandidate()
+    }
+  }
+
   // No frame by now ⇒ this candidate is not the engine. `started` alone proves
   // nothing (a binary can exec and say nothing), and QProcess's errorOccurred
   // is exposed in Quickshell 0.3.1 as an overridable Method rather than a
@@ -577,9 +662,10 @@ Item {
   }
 
   // `quit` normally ends the child by itself. This only fires if it ignored
-  // quit — and the write cannot be lost anyway: when the Loader tears this
-  // Process down, the pipe closes, and the engine banks the run and exits on
-  // EOF (snake.c:1202-1207). The save survives either path.
+  // quit — and whether the write ever reached the pipe no longer matters at all:
+  // when the Loader tears this Process down the destructor kills the child, and
+  // the record it was holding was already on disk when it was beaten. Both files
+  // are written by the engine as it plays; nothing here is load-bearing.
   Timer {
     id: killTimer
     interval: 600
@@ -670,11 +756,11 @@ Item {
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
           textFormat: Text.PlainText
-          // LAST HIGH SCORE, not BEST: this file is written at the END of a run (it lives
-          // in the watched plugin folder, so it is not written mid-play), which means the
-          // number standing here is the last saved one — and a player who is on fire has
-          // already passed it. Calling it BEST while LEN is bigger invites the reading
-          // that the game is lying about the score; it isn't, it is showing last run's.
+          // The number is `best` straight out of engine frames, which is the record AS IT
+          // STANDS ON DISK (snake.c:best_len) and rises the instant the run beats it — the
+          // save is no longer waiting for the window to close. The word stays LAST because
+          // it is what the record has always been called on this card; while a record run is
+          // in progress it climbs with LEN, which is the truth, not a bug.
           text: "LEN " + root.len + "   LAST HIGH SCORE " + root.best
           color: Color.menu.text.toString()
           font.family: Style.font.menuFamily
@@ -1014,9 +1100,10 @@ Item {
         }
         Text {
           textFormat: Text.PlainText
-          // The same words as the HUD, for the same reason, and they matter more here: the
-          // run is over but the record is not written yet (the save waits for the way out),
-          // so this is the last saved record — not a claim about the run that just died.
+          // The same words as the HUD, and by now they are the same number too: the record
+          // went to disk the tick this run beat it, so the game-over card is reporting the
+          // file the player could go and read — not a promise about what will be written
+          // when the window closes.
           text: "LEN " + root.len + " · LAST HIGH SCORE " + root.best
           color: Color.menu.text.toString()
           font.family: Style.font.menuFamily
@@ -1072,7 +1159,9 @@ Item {
           wrapMode: Text.WordWrap
           width: parent.width
           visible: !root.gotFrame
-          text: "Build it first:  cd /home/londelo/CastleLondelo/projects/tsnake && make"
+          text: "No engine binary, and the automatic build failed. Run ./install.sh in"
+                + " this folder (it builds snake and installs it beside this file), or"
+                + " check that `make` and `gcc` are installed."
                 + "\nTried: " + root.engineCandidates().join(", ")
           color: Color.menu.text.toString()
           font.family: Style.font.menuFamily
