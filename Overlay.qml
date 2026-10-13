@@ -799,6 +799,10 @@ Item {
         id: boardArea
         width: Math.max(2, root.cellSize * root.bw)
         height: Math.max(2, root.cellSize * root.bh)
+        // The placeholder 10x6 outline (bw/bh start values) has no business on
+        // the black screen — the engine's own board size arrives in the first
+        // frame, and then the board shows with everything else (see setupUp).
+        visible: root.gotFrame
 
         Canvas {
           id: boardCanvas
