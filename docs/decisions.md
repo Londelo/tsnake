@@ -73,6 +73,20 @@ dies on a routine update. So: **code lives in the plugin folder, state lives in
 git-tracked files and run nothing — which is also why `snake` must already be
 built and on PATH for a stranger's install.
 
+## The opening order: black screen, engine, card
+
+2026-10-13, Brodie's call, reversing the 2026-10-10 "card the instant the window
+is" decision. The window now opens showing only its background — no HUD, no help
+row, no setup card — while the engine is built (auto-install) and forked behind
+that black screen. The engine's FIRST FRAME ends the silence: board, HUD, help
+row and the setup card all arrive together, painted from the engine's own
+numbers. The card can therefore never show a value the engine has not confirmed,
+and the black screen is the honest face of "the engine is still starting". If no
+frame ever lands, the watchdog retires the candidate and the error panel replaces
+the black screen. The old decision traded a two-beat pop-in for a card that
+could speak before the engine could; this trades nothing, at the cost of a
+second or two of black on a cold build.
+
 ## The setup card's settings persist, engine-owned
 
 `load_setup()` runs *before* the first frame; `save_setup()` fires on every

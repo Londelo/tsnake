@@ -238,16 +238,18 @@ Item {
   }
 
   readonly property bool menuUp: root.opened && (root.alive === 0 || root.paused === 1)
-  // The card is up the moment the window is, NOT the moment the first frame arrives.
-  // The gotFrame term used to gate this, and it was the startup latency Brodie saw: the
-  // window appeared over an empty board, sat there while the engine was forked, ncurses
-  // came up and the first tick landed, and only THEN did the card pop in — a two-beat
-  // "weird, then the game starts". It is not a gamble to drop it: `started` is reset to 0
-  // by startEngine() before the fork, and an engine under --protocol always begins
-  // unstarted (protocol_run), so the card is the engine's own answer one instant early
-  // rather than an opinion. What keeps it honest is engineFailed — an engine that never
-  // shows is still caught by the watchdog and the card makes way for the error panel.
-  readonly property bool setupUp: root.opened && root.started === 0
+  // The opening order, Brodie's call 2026-10-13: BLACK SCREEN first — the window shows
+  // nothing but its background while the engine is built and forked — then the engine's
+  // FIRST FRAME, then the setup card. The card is the engine's own answer, never an
+  // opinion: every number it shows (wrap, speed, LEN, BEST) arrives in that frame, so it
+  // cannot appear, correct itself a beat later, and it cannot offer controls for a board
+  // that does not exist yet. The same gate holds the HUD and the help row off the black
+  // screen, so the whole surface arrives together. What keeps it honest is engineFailed:
+  // an engine that never shows is caught by the watchdog, and the black screen makes way
+  // for the error panel. (This reverses the 2026-10-10 "card the instant the window is"
+  // decision, which traded a two-beat pop-in for a card that could speak before the
+  // engine could. The full story is in docs/decisions.md.)
+  readonly property bool setupUp: root.gotFrame && root.opened && root.started === 0
                                  && root.alive === 1 && !root.engineFailed
 
   // --------------------------------------------------- exactly one cell map
@@ -750,6 +752,10 @@ Item {
         id: hud
         width: parent.width
         height: root.hudHeight
+        // Black screen until the engine speaks: LEN 0 / LAST HIGH SCORE 0 would be
+        // the overlay inventing numbers the first frame has not confirmed (opening
+        // order, see setupUp).
+        visible: root.gotFrame
 
         Text {
           id: hudLeft
@@ -833,6 +839,7 @@ Item {
         id: helpRow
         width: parent.width
         height: root.helpHeight
+        visible: root.gotFrame   // same black-screen gate as the HUD (see setupUp)
         textFormat: Text.PlainText
         // Two different key sets, because there are two different games up here: the
         // setup card answers `q` and the mouse, and naming `arrows`/`h`/`p`/`r` while
