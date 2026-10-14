@@ -1327,63 +1327,105 @@ Item {
     if (!ctx) return
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // The design language, borrowed from the reference photo and not from its
-    // shape: a THICK body, a solid light outline, and a checkerboard dither
-    // filling the body like scales — two colours only, white and a very light
-    // grey. The shape stays the infinity loop. Rasterising by distance to the
-    // curve (rather than by sampled cells) is what lets the body be thick and
-    // the outline be solid while the fill stays checkered.
+    // The shape and shadow language, from the reference and redrawn flat-side:
+    // a ribbon infinity whose RIGHT strand passes OVER the left through the
+    // middle, casting a shadow onto it, with a soft dithered drop shadow
+    // under the whole body. Two colours only — white (left strand, the head)
+    // and light grey (right strand, on top) — plus their dithers. The lobes
+    // are round; the crossing is the long thin twist of a real ribbon, not a
+    // sharp X, which is exactly how the reference draws its own twist.
     var block = canvas.logoBlock
     var cols = 60
     var rows = 34
     var cx = (cols - 1) / 2
     var cy = (rows - 1) / 2
-    var A = 23          // half-width in cells; the Gerono height follows as A/2
-    var R = 4.2         // body radius in cells
-    var edge = 1.5      // solid outline ring, in cells
+    var A = 21          // half-width in cells
+    var H = 12.5        // lobe amplitude in cells
+    var R = 4.3         // body radius in cells
 
-    // Sample the lemniscate once, in cell units.
-    var N = 800
-    var pxs = []
-    var pys = []
+    // The two strands as sample points: right (cos t > 0) passes over.
+    var N = 750
+    var rx = []
+    var ry = []
+    var lx = []
+    var ly = []
     for (var i = 0; i <= N; i++) {
       var t = i / N * 2 * Math.PI
-      pxs.push(cx + A * Math.cos(t))
-      pys.push(cy + A * Math.sin(t) * Math.cos(t))
+      var px = cx + A * Math.cos(t)
+      var py = cy + H * Math.sin(t) * Math.cos(t)
+      if (Math.cos(t) > 0) { rx.push(px); ry.push(py) }
+      else { lx.push(px); ly.push(py) }
     }
 
-    var white = "#ffffff"
-    var grey = "#d6d6d6"
-    var hx = cx + A
-    var hy = cy
+    function dmin(ax, ay, mx, my) {
+      var best = 1e18
+      for (var s = 0; s < ax.length; s++) {
+        var dx = mx - ax[s]
+        var dy = my - ay[s]
+        var d2 = dx * dx + dy * dy
+        if (d2 < best) best = d2
+      }
+      return Math.sqrt(best)
+    }
+
+    // Classify every cell once: 0 empty, 1 white strand, 2 grey strand,
+    // 3 cast shadow (grey dither on the left strand, where the right one
+    // crosses over), 4 drop shadow (grey dither, body offset down-right).
+    var grid = []
+    var inside = []
     for (var y = 0; y < rows; y++) {
       for (var x = 0; x < cols; x++) {
         var mx = x + 0.5
         var my = y + 0.5
-        // The head sits on the loop's right crossing and reads solid.
-        var hdx = mx - hx
-        var hdy = my - hy
-        if (hdx * hdx + hdy * hdy <= 2.6 * 2.6) {
-          ctx.fillStyle = white
-          ctx.fillRect(x * block, y * block, block, block)
-          continue
-        }
-        var best = 1e9
-        for (var s = 0; s <= N; s++) {
-          var dx = mx - pxs[s]
-          var dy = my - pys[s]
-          var d2 = dx * dx + dy * dy
-          if (d2 < best) best = d2
-        }
-        var d = Math.sqrt(best)
-        if (d >= R) continue
-        if (d >= R - edge) ctx.fillStyle = white
-        else ctx.fillStyle = ((x + y) % 2 === 0) ? white : grey
-        ctx.fillRect(x * block, y * block, block, block)
+        var dR = dmin(rx, ry, mx, my)
+        var dL = dmin(lx, ly, mx, my)
+        var d = dR < dL ? dR : dL
+        inside[y * cols + x] = d < R
+        if (dR < R) grid[y * cols + x] = 2
+        else if (dL < R && dR < R + 1.5) grid[y * cols + x] = 3
+        else if (dL < R) grid[y * cols + x] = 1
+        else grid[y * cols + x] = 0
+      }
+    }
+    for (var y2 = 0; y2 < rows; y2++) {
+      for (var x2 = 0; x2 < cols; x2++) {
+        if (grid[y2 * cols + x2] !== 0) continue
+        // Drop shadow: the body two cells up-left of here.
+        var ox = x2 - 2
+        var oy = y2 - 2
+        if (ox >= 0 && oy >= 0 && inside[oy * cols + ox]) grid[y2 * cols + x2] = 4
       }
     }
 
-    // Two black eyes, set into the head where the photo sets them.
+    var white = "#ffffff"
+    var grey = "#d6d6d6"
+    for (var yy = 0; yy < rows; yy++) {
+      for (var xx = 0; xx < cols; xx++) {
+        var v = grid[yy * cols + xx]
+        if (v === 1) ctx.fillStyle = white
+        else if (v === 2) ctx.fillStyle = grey
+        else if (v === 3 || v === 4) {
+          if ((xx + yy) % 2 !== 0) continue
+          ctx.fillStyle = grey
+        } else continue
+        ctx.fillRect(xx * block, yy * block, block, block)
+      }
+    }
+
+    // Head: a solid white blob on the right lobe's end, with two black eyes
+    // — the snake biting its own tail, as the reference sets its head.
+    var hx = cx + A
+    var hy = cy
+    for (var hy2 = 0; hy2 < rows; hy2++) {
+      for (var hx2 = 0; hx2 < cols; hx2++) {
+        var ddx = hx2 + 0.5 - hx
+        var ddy = hy2 + 0.5 - hy
+        if (ddx * ddx + ddy * ddy <= 3.0 * 3.0) {
+          ctx.fillStyle = white
+          ctx.fillRect(hx2 * block, hy2 * block, block, block)
+        }
+      }
+    }
     ctx.fillStyle = "#000000"
     ctx.fillRect((hx + 1) * block - block * 0.15, (hy - 1) * block - block * 0.15,
                  block * 0.9, block * 0.9)
