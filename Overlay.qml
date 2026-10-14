@@ -1340,7 +1340,8 @@ Item {
     var cx = (cols - 1) / 2
     var cy = (rows - 1) / 2
     var A = 21          // half-width in cells
-    var H = 12.5        // lobe amplitude in cells
+    var H = 21          // lobe height in cells (the Gerono amplitude is H/2,
+                        // so A = H is what makes the lobes round)
     var R = 4.3         // body radius in cells
 
     // The two strands as sample points: right (cos t > 0) passes over.
