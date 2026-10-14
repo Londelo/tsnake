@@ -1327,44 +1327,68 @@ Item {
     if (!ctx) return
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // A fine grid on purpose: the blockiness is the language, but the curve's
-    // smoothness is the detail — and detail only shows when the cells are
-    // small enough that the lemniscate bends between them, not across them.
+    // The design language, borrowed from the reference photo and not from its
+    // shape: a THICK body, a solid light outline, and a checkerboard dither
+    // filling the body like scales — two colours only, white and a very light
+    // grey. The shape stays the infinity loop. Rasterising by distance to the
+    // curve (rather than by sampled cells) is what lets the body be thick and
+    // the outline be solid while the fill stays checkered.
     var block = canvas.logoBlock
     var cols = 60
     var rows = 34
     var cx = (cols - 1) / 2
     var cy = (rows - 1) / 2
-    var A = cx - 3   // half-width in cells; the Gerono height follows as A/2
+    var A = 23          // half-width in cells; the Gerono height follows as A/2
+    var R = 4.2         // body radius in cells
+    var edge = 1.5      // solid outline ring, in cells
 
-    // Sample the curve and keep one cell per step. Dense enough that
-    // consecutive samples land in neighbouring cells — no gaps, no stair
-    // runs longer than one cell, which is what made the coarse grid read as
-    // bricks instead of a snake.
-    var cells = {}
-    var steps = 2500
-    for (var i = 0; i <= steps; i++) {
-      var t = i / steps * 2 * Math.PI
-      var gx = Math.round(cx + A * Math.cos(t))
-      var gy = Math.round(cy + A * Math.sin(t) * Math.cos(t))
-      cells[gx + "," + gy] = 1
+    // Sample the lemniscate once, in cell units.
+    var N = 800
+    var pxs = []
+    var pys = []
+    for (var i = 0; i <= N; i++) {
+      var t = i / N * 2 * Math.PI
+      pxs.push(cx + A * Math.cos(t))
+      pys.push(cy + A * Math.sin(t) * Math.cos(t))
     }
 
-    // One white block per cell, inset by a pixel so the grid reads as pixels.
-    ctx.fillStyle = "#ffffff"
-    for (var key in cells) {
-      var p = key.split(",")
-      ctx.fillRect(Number(p[0]) * block + 1, Number(p[1]) * block + 1,
-                   block - 2, block - 2)
+    var white = "#ffffff"
+    var grey = "#d6d6d6"
+    var hx = cx + A
+    var hy = cy
+    for (var y = 0; y < rows; y++) {
+      for (var x = 0; x < cols; x++) {
+        var mx = x + 0.5
+        var my = y + 0.5
+        // The head sits on the loop's right crossing and reads solid.
+        var hdx = mx - hx
+        var hdy = my - hy
+        if (hdx * hdx + hdy * hdy <= 2.6 * 2.6) {
+          ctx.fillStyle = white
+          ctx.fillRect(x * block, y * block, block, block)
+          continue
+        }
+        var best = 1e9
+        for (var s = 0; s <= N; s++) {
+          var dx = mx - pxs[s]
+          var dy = my - pys[s]
+          var d2 = dx * dx + dy * dy
+          if (d2 < best) best = d2
+        }
+        var d = Math.sqrt(best)
+        if (d >= R) continue
+        if (d >= R - edge) ctx.fillStyle = white
+        else ctx.fillStyle = ((x + y) % 2 === 0) ? white : grey
+        ctx.fillRect(x * block, y * block, block, block)
+      }
     }
 
-    // Head: a 3x3 block centred on the crossing at the right, with a black
-    // eye — the snake biting its own tail.
-    var hx = Math.round(cx + A)
-    var hy = Math.round(cy)
-    ctx.fillRect((hx - 1) * block, (hy - 1) * block, block * 3, block * 3)
+    // Two black eyes, set into the head where the photo sets them.
     ctx.fillStyle = "#000000"
-    ctx.fillRect((hx + 1.4) * block, (hy - 0.7) * block, block * 0.7, block * 0.7)
+    ctx.fillRect((hx + 1) * block - block * 0.15, (hy - 1) * block - block * 0.15,
+                 block * 0.9, block * 0.9)
+    ctx.fillRect((hx + 1) * block - block * 0.15, (hy + 1) * block - block * 0.15,
+                 block * 0.9, block * 0.9)
   }
 
   function paintBoard(canvas) {
