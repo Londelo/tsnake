@@ -1331,30 +1331,34 @@ Item {
     // a ribbon infinity whose RIGHT strand passes OVER the left through the
     // middle, casting a shadow onto it, with a soft dithered drop shadow
     // under the whole body. Two colours only — white (left strand, the head)
-    // and light grey (right strand, on top) — plus their dithers. The lobes
-    // are round; the crossing is the long thin twist of a real ribbon, not a
-    // sharp X, which is exactly how the reference draws its own twist.
+    // and light grey (right strand, on top) — plus their dithers. The curve is
+    // Bernoulli's lemniscate, not Gerono's: Gerono's lobes pinch into lenses
+    // with almost no hole, but Bernoulli's swell into round teardrops, which
+    // is what the reference's rings look like.
     var block = canvas.logoBlock
     var cols = 60
     var rows = 34
     var cx = (cols - 1) / 2
     var cy = (rows - 1) / 2
-    var A = 21          // half-width in cells
-    var H = 21          // lobe height in cells (the Gerono amplitude is H/2,
-                        // so A = H is what makes the lobes round)
-    var R = 4.3         // body radius in cells
+    var a = 26          // half-width in cells
+    var R = 3.2         // body radius in cells — thin enough that each lobe
+                        // shows a real hole, thick enough to read as a body
 
-    // The two strands as sample points: right (cos t > 0) passes over.
-    var N = 750
+    // The curve sampled once; the right half (x >= cx) is the strand on top.
+    var N = 800
     var rx = []
     var ry = []
     var lx = []
     var ly = []
+    var fx = []
+    var fy = []
     for (var i = 0; i <= N; i++) {
       var t = i / N * 2 * Math.PI
-      var px = cx + A * Math.cos(t)
-      var py = cy + H * Math.sin(t) * Math.cos(t)
-      if (Math.cos(t) > 0) { rx.push(px); ry.push(py) }
+      var s = 1 + Math.sin(t) * Math.sin(t)
+      var px = cx + a * Math.cos(t) / s
+      var py = cy + a * Math.sin(t) * Math.cos(t) / s
+      fx.push(px); fy.push(py)
+      if (px >= cx) { rx.push(px); ry.push(py) }
       else { lx.push(px); ly.push(py) }
     }
 
@@ -1391,10 +1395,8 @@ Item {
     for (var y2 = 0; y2 < rows; y2++) {
       for (var x2 = 0; x2 < cols; x2++) {
         if (grid[y2 * cols + x2] !== 0) continue
-        // Drop shadow: the body two cells up-left of here.
-        var ox = x2 - 2
-        var oy = y2 - 2
-        if (ox >= 0 && oy >= 0 && inside[oy * cols + ox]) grid[y2 * cols + x2] = 4
+        // Drop shadow: the body sits a little up-left of here.
+        if (dmin(fx, fy, x2 + 0.5 - 1.5, y2 + 0.5 - 1.5) < R) grid[y2 * cols + x2] = 4
       }
     }
 
@@ -1415,13 +1417,13 @@ Item {
 
     // Head: a solid white blob on the right lobe's end, with two black eyes
     // — the snake biting its own tail, as the reference sets its head.
-    var hx = cx + A
+    var hx = cx + a
     var hy = cy
     for (var hy2 = 0; hy2 < rows; hy2++) {
       for (var hx2 = 0; hx2 < cols; hx2++) {
         var ddx = hx2 + 0.5 - hx
         var ddy = hy2 + 0.5 - hy
-        if (ddx * ddx + ddy * ddy <= 3.0 * 3.0) {
+        if (ddx * ddx + ddy * ddy <= 2.6 * 2.6) {
           ctx.fillStyle = white
           ctx.fillRect(hx2 * block, hy2 * block, block, block)
         }
