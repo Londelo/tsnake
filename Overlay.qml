@@ -1374,7 +1374,7 @@ Item {
     }
 
     // Classify every cell once: 0 empty, 1 white strand, 2 grey strand,
-    // 3 cast shadow (grey dither on the left strand, where the right one
+    // 3 cast shadow (solid grey on the left strand, where the right one
     // crosses over), 4 drop shadow (grey dither, body offset down-right).
     var grid = []
     var inside = []
@@ -1406,8 +1406,11 @@ Item {
       for (var xx = 0; xx < cols; xx++) {
         var v = grid[yy * cols + xx]
         if (v === 1) ctx.fillStyle = white
-        else if (v === 2) ctx.fillStyle = grey
-        else if (v === 3 || v === 4) {
+        else if (v === 2 || v === 3) ctx.fillStyle = grey
+        else if (v === 4) {
+          // The drop shadow stays dithered — it lies on black, where the
+          // checker is the only thing that reads as soft. The cast shadow is
+          // solid: on white, a dithered grey reads as a border, not a shadow.
           if ((xx + yy) % 2 !== 0) continue
           ctx.fillStyle = grey
         } else continue
