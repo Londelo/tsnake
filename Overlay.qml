@@ -869,9 +869,9 @@ Item {
       id: logoCanvas
       anchors.centerIn: parent
       visible: root.opened && !root.gotFrame && !root.engineFailed
-      readonly property int logoBlock: Math.max(10, Style.space(18))
-      width: 21 * logoBlock
-      height: 11 * logoBlock
+      readonly property int logoBlock: Math.max(6, Style.space(7))
+      width: 60 * logoBlock
+      height: 34 * logoBlock
       onPaint: root.paintLogo(logoCanvas)
       onVisibleChanged: requestPaint()
     }
@@ -1327,17 +1327,22 @@ Item {
     if (!ctx) return
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
+    // A fine grid on purpose: the blockiness is the language, but the curve's
+    // smoothness is the detail — and detail only shows when the cells are
+    // small enough that the lemniscate bends between them, not across them.
     var block = canvas.logoBlock
-    var cols = 21
-    var rows = 11
+    var cols = 60
+    var rows = 34
     var cx = (cols - 1) / 2
     var cy = (rows - 1) / 2
-    var A = cx - 1.5   // half-width in cells; the Gerono height follows as A/2
+    var A = cx - 3   // half-width in cells; the Gerono height follows as A/2
 
-    // Sample the curve and keep one cell per step — the blockiness is the
-    // point, so cells, not pixels.
+    // Sample the curve and keep one cell per step. Dense enough that
+    // consecutive samples land in neighbouring cells — no gaps, no stair
+    // runs longer than one cell, which is what made the coarse grid read as
+    // bricks instead of a snake.
     var cells = {}
-    var steps = 720
+    var steps = 2500
     for (var i = 0; i <= steps; i++) {
       var t = i / steps * 2 * Math.PI
       var gx = Math.round(cx + A * Math.cos(t))
@@ -1353,14 +1358,13 @@ Item {
                    block - 2, block - 2)
     }
 
-    // Head: a 2x2 block centred on the crossing at the right, with a black
+    // Head: a 3x3 block centred on the crossing at the right, with a black
     // eye — the snake biting its own tail.
     var hx = Math.round(cx + A)
     var hy = Math.round(cy)
-    ctx.fillRect((hx - 0.5) * block, (hy - 0.5) * block, block * 2, block * 2)
+    ctx.fillRect((hx - 1) * block, (hy - 1) * block, block * 3, block * 3)
     ctx.fillStyle = "#000000"
-    ctx.fillRect((hx + 1.5) * block - block * 0.6,
-                 (hy - 0.5) * block + block * 0.15, block * 0.45, block * 0.45)
+    ctx.fillRect((hx + 1.4) * block, (hy - 0.7) * block, block * 0.7, block * 0.7)
   }
 
   function paintBoard(canvas) {
