@@ -869,11 +869,15 @@ Item {
       id: logoCanvas
       anchors.centerIn: parent
       visible: root.opened && !root.gotFrame && !root.engineFailed
-      readonly property int logoBlock: Math.max(6, Style.space(7))
+      // Sized to the window, not to a fixed block: the logo has to read as a
+      // snake from across the room, and a 420px stamp in a 1600px window reads
+      // as a smudge. Half the window's width, floor of eight pixels a cell.
+      readonly property int logoBlock: Math.max(8, Math.floor(parent.width * 0.55 / 60))
       width: 60 * logoBlock
       height: 34 * logoBlock
       onPaint: root.paintLogo(logoCanvas)
       onVisibleChanged: requestPaint()
+      onWidthChanged: requestPaint()
     }
 
     // Menu overlays live OUTSIDE the column, so a panel never resizes the
@@ -1330,11 +1334,13 @@ Item {
     // The shape and shadow language, from the reference and redrawn flat-side:
     // a ribbon infinity whose RIGHT strand passes OVER the left through the
     // middle, casting a shadow onto it, with a soft dithered drop shadow
-    // under the whole body. Two colours only — white (left strand, the head)
-    // and light grey (right strand, on top) — plus their dithers. The curve is
-    // Bernoulli's lemniscate, not Gerono's: Gerono's lobes pinch into lenses
-    // with almost no hole, but Bernoulli's swell into round teardrops, which
-    // is what the reference's rings look like.
+    // under the whole body. The body is one colour — white — and the grey is
+    // reserved for its shadows, exactly as the reference dresses its snake;
+    // a two-tone body turned the crossing into a grey blob and read as no
+    // pattern at all. The curve is Bernoulli's lemniscate, not Gerono's:
+    // Gerono's lobes pinch into lenses with almost no hole, but Bernoulli's
+    // swell into round teardrops, which is what the reference's rings look
+    // like.
     var block = canvas.logoBlock
     var cols = 60
     var rows = 34
@@ -1373,7 +1379,7 @@ Item {
       return Math.sqrt(best)
     }
 
-    // Classify every cell once: 0 empty, 1 white strand, 2 grey strand,
+    // Classify every cell once: 0 empty, 1 white body (both strands),
     // 3 cast shadow (solid grey on the left strand, where the right one
     // crosses over), 4 drop shadow (grey dither, body offset down-right).
     var grid = []
@@ -1386,7 +1392,7 @@ Item {
         var dL = dmin(lx, ly, mx, my)
         var d = dR < dL ? dR : dL
         inside[y * cols + x] = d < R
-        if (dR < R) grid[y * cols + x] = 2
+        if (dR < R) grid[y * cols + x] = 1
         else if (dL < R && dR < R + 1.5) grid[y * cols + x] = 3
         else if (dL < R) grid[y * cols + x] = 1
         else grid[y * cols + x] = 0
@@ -1406,7 +1412,7 @@ Item {
       for (var xx = 0; xx < cols; xx++) {
         var v = grid[yy * cols + xx]
         if (v === 1) ctx.fillStyle = white
-        else if (v === 2 || v === 3) ctx.fillStyle = grey
+        else if (v === 3) ctx.fillStyle = grey
         else if (v === 4) {
           // The drop shadow stays dithered — it lies on black, where the
           // checker is the only thing that reads as soft. The cast shadow is
@@ -1426,17 +1432,17 @@ Item {
       for (var hx2 = 0; hx2 < cols; hx2++) {
         var ddx = hx2 + 0.5 - hx
         var ddy = hy2 + 0.5 - hy
-        if (ddx * ddx + ddy * ddy <= 2.6 * 2.6) {
+        if (ddx * ddx + ddy * ddy <= 3.4 * 3.4) {
           ctx.fillStyle = white
           ctx.fillRect(hx2 * block, hy2 * block, block, block)
         }
       }
     }
     ctx.fillStyle = "#000000"
-    ctx.fillRect((hx + 1) * block - block * 0.15, (hy - 1) * block - block * 0.15,
-                 block * 0.9, block * 0.9)
-    ctx.fillRect((hx + 1) * block - block * 0.15, (hy + 1) * block - block * 0.15,
-                 block * 0.9, block * 0.9)
+    ctx.fillRect((hx + 1) * block - block * 0.2, (hy - 1.6) * block - block * 0.2,
+                 block * 1.2, block * 1.2)
+    ctx.fillRect((hx + 1) * block - block * 0.2, (hy + 1.6) * block - block * 0.2,
+                 block * 1.2, block * 1.2)
   }
 
   function paintBoard(canvas) {
