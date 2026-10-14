@@ -83,9 +83,12 @@ row and the setup card all arrive together, painted from the engine's own
 numbers. The card can therefore never show a value the engine has not confirmed,
 and the black screen is the honest face of "the engine is still starting". If no
 frame ever lands, the watchdog retires the candidate and the error panel replaces
-the black screen. The old decision traded a two-beat pop-in for a card that
-could speak before the engine could; this trades nothing, at the cost of a
-second or two of black on a cold build.
+the black screen. The black screen is not empty-empty: a blocky white snake
+traces an infinity loop in the middle of it — the pixel ouroboros, drawn with
+the board's own language (cells, not curves) — and it retires with the first
+frame. The old decision traded a two-beat pop-in for a card that could speak
+before the engine could; this trades nothing, at the cost of a second or two of
+black on a cold build.
 
 ## The setup card's settings persist, engine-owned
 
