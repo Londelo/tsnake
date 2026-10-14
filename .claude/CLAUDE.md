@@ -13,7 +13,7 @@ Lowercase-only, arrows-only steering: `q`/`p`/`x`/`h`/`r` + arrows (no WASD/vim/
 - **Code lives in the plugin folder, state lives in `$XDG_STATE_HOME`.**
 - Horizontal moves take a **2-cell stride** (cells are ~2x taller than wide); `hunt_stride_free` checks the WHOLE stride, `hunt_next_cell` wraps exactly like `advance_one` — plan on the board the snake travels, or the AI marches straight forever.
 - The **`started` gate**: a resize is a MOVE, not a new run — `sanitize_after_resize` never re-inits (a resize once silently pressed START: the overlay's first act is a `{"cmd":"size"}` report).
-- **The opening order** (Brodie, 2026-10-13): black screen → engine → first frame → setup card. Nothing paints before the engine's first frame — no HUD, no help row, no card (`gotFrame` gates them all); the error panel replaces the black screen if no frame ever lands.
+- **The opening order** (Brodie, 2026-10-13): black screen → engine → first frame → setup card. Nothing paints before the engine's first frame — no HUD, no help row, no card (`gotFrame` gates them all); the error panel replaces the black screen if no frame ever lands. The black screen wears the pixel ouroboros (`paintLogo`/`logoCanvas`) — the same gate retires it.
 - `stateUsable` (`Overlay.qml`, with its `stateFile`/`setupFile`/`argv` chain) refuses a root-ish state path, and `state_file_trustworthy`/`O_NOFOLLOW` (`snake.c`) refuse a junk or symlinked save file.
 - `spawn_food`: ≤1000 re-rolls, and `other_token_at` must test "is something else here" (an empty cell reads -1, which `!= i`).
 - Mouse input: `mouseinterval(0)`, never coalesced; `handle_mouse` drains the whole queue per `KEY_MOUSE`.

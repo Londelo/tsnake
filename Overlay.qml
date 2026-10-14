@@ -860,6 +860,22 @@ Item {
       }
     }
 
+    // The black screen is not empty-empty: while the engine builds and forks,
+    // a blocky white snake traces an infinity loop in the middle of it — the
+    // pixel ouroboros, same language as the board. It retires the instant the
+    // first frame lands, and steps aside for the error panel if no frame ever
+    // does (the same gotFrame gate that holds the board back).
+    Canvas {
+      id: logoCanvas
+      anchors.centerIn: parent
+      visible: root.opened && !root.gotFrame && !root.engineFailed
+      readonly property int logoBlock: Math.max(10, Style.space(18))
+      width: 21 * logoBlock
+      height: 11 * logoBlock
+      onPaint: root.paintLogo(logoCanvas)
+      onVisibleChanged: requestPaint()
+    }
+
     // Menu overlays live OUTSIDE the column, so a panel never resizes the
     // board underneath it and reflows no cells mid-death.
     //
@@ -1300,6 +1316,53 @@ Item {
   // pair 1 green (food, eat flash), pair 2 white (body), pair 3 red (corpse)
   // plus its A_BOLD red-orange (hunt border). Pair 4 yellow is the same
   // argument up in hudRight.
+  // The black-screen logo: a white snake tracing an infinity loop — an ouroboros
+  // in pixels, the same blocky language the board paints with. The curve is a
+  // lemniscate of Gerono (x = cos t, y = sin t cos t) sampled onto the grid;
+  // every cell it lands in becomes one white block, and the head sits on the
+  // loop where the tail crosses, biting it. No engine, no frame, nothing
+  // invented — this is the honest face of "still starting".
+  function paintLogo(canvas) {
+    var ctx = canvas.getContext("2d")
+    if (!ctx) return
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+    var block = canvas.logoBlock
+    var cols = 21
+    var rows = 11
+    var cx = (cols - 1) / 2
+    var cy = (rows - 1) / 2
+    var A = cx - 1.5   // half-width in cells; the Gerono height follows as A/2
+
+    // Sample the curve and keep one cell per step — the blockiness is the
+    // point, so cells, not pixels.
+    var cells = {}
+    var steps = 720
+    for (var i = 0; i <= steps; i++) {
+      var t = i / steps * 2 * Math.PI
+      var gx = Math.round(cx + A * Math.cos(t))
+      var gy = Math.round(cy + A * Math.sin(t) * Math.cos(t))
+      cells[gx + "," + gy] = 1
+    }
+
+    // One white block per cell, inset by a pixel so the grid reads as pixels.
+    ctx.fillStyle = "#ffffff"
+    for (var key in cells) {
+      var p = key.split(",")
+      ctx.fillRect(Number(p[0]) * block + 1, Number(p[1]) * block + 1,
+                   block - 2, block - 2)
+    }
+
+    // Head: a 2x2 block centred on the crossing at the right, with a black
+    // eye — the snake biting its own tail.
+    var hx = Math.round(cx + A)
+    var hy = Math.round(cy)
+    ctx.fillRect((hx - 0.5) * block, (hy - 0.5) * block, block * 2, block * 2)
+    ctx.fillStyle = "#000000"
+    ctx.fillRect((hx + 1.5) * block - block * 0.6,
+                 (hy - 0.5) * block + block * 0.15, block * 0.45, block * 0.45)
+  }
+
   function paintBoard(canvas) {
     var ctx = canvas.getContext("2d")
     if (!ctx) return
