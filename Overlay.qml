@@ -1331,26 +1331,26 @@ Item {
     if (!ctx) return
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // The shape and shadow language, from the reference and redrawn flat-side:
-    // a ribbon infinity whose RIGHT strand passes OVER the left through the
-    // middle, casting a shadow onto it, with a soft dithered drop shadow
-    // under the whole body. The body is one colour — white — and the grey is
-    // reserved for its shadows, exactly as the reference dresses its snake;
-    // a two-tone body turned the crossing into a grey blob and read as no
-    // pattern at all. The curve is Bernoulli's lemniscate, not Gerono's:
-    // Gerono's lobes pinch into lenses with almost no hole, but Bernoulli's
-    // swell into round teardrops, which is what the reference's rings look
-    // like.
+    // The snake now wears the reference's whole design language, not just its
+    // shape: a SOLID WHITE OUTLINE around the body, a sparse SCALE DITHER
+    // filling it (one grey cell in four), a solid grey SHADOW BAND where the
+    // right strand passes over the left, and a dithered drop shadow under the
+    // whole body. The head is drawn in the same language — outline, scales,
+    // two black eyes — so it reads as a head and not a white smudge.
+    //
+    // The curve is the average of two lemniscates: Gerono's (a real crossing
+    // in the middle, but lens-flat lobes) and Bernoulli's (round teardrop
+    // lobes, but a pinched tangent crossing). Averaged, the snake gets both.
     var block = canvas.logoBlock
     var cols = 60
     var rows = 34
     var cx = (cols - 1) / 2
     var cy = (rows - 1) / 2
-    var a = 26          // half-width in cells
-    var R = 3.2         // body radius in cells — thin enough that each lobe
-                        // shows a real hole, thick enough to read as a body
+    var R = 3.8         // body radius in cells
+    var edge = 1.1      // solid outline ring, in cells
+    var hx = cx + 26    // the head sits on the right lobe's tip
+    var hy = cy
 
-    // The curve sampled once; the right half (x >= cx) is the strand on top.
     var N = 800
     var rx = []
     var ry = []
@@ -1360,9 +1360,13 @@ Item {
     var fy = []
     for (var i = 0; i <= N; i++) {
       var t = i / N * 2 * Math.PI
+      var gx = cx + 26 * Math.cos(t)
+      var gy = cy + 17 * Math.sin(t) * Math.cos(t)
       var s = 1 + Math.sin(t) * Math.sin(t)
-      var px = cx + a * Math.cos(t) / s
-      var py = cy + a * Math.sin(t) * Math.cos(t) / s
+      var bx = cx + 26 * Math.cos(t) / s
+      var by = cy + 26 * Math.sin(t) * Math.cos(t) / s
+      var px = (gx + bx) / 2
+      var py = (gy + by) / 2
       fx.push(px); fy.push(py)
       if (px >= cx) { rx.push(px); ry.push(py) }
       else { lx.push(px); ly.push(py) }
@@ -1370,20 +1374,18 @@ Item {
 
     function dmin(ax, ay, mx, my) {
       var best = 1e18
-      for (var s = 0; s < ax.length; s++) {
-        var dx = mx - ax[s]
-        var dy = my - ay[s]
+      for (var s2 = 0; s2 < ax.length; s2++) {
+        var dx = mx - ax[s2]
+        var dy = my - ay[s2]
         var d2 = dx * dx + dy * dy
         if (d2 < best) best = d2
       }
       return Math.sqrt(best)
     }
 
-    // Classify every cell once: 0 empty, 1 white body (both strands),
-    // 3 cast shadow (solid grey on the left strand, where the right one
-    // crosses over), 4 drop shadow (grey dither, body offset down-right).
+    // Classify every cell once: 0 empty, 1 white, 2 grey (a scale or the
+    // drop dither), 3 the solid cast shadow band.
     var grid = []
-    var inside = []
     for (var y = 0; y < rows; y++) {
       for (var x = 0; x < cols; x++) {
         var mx = x + 0.5
@@ -1391,18 +1393,23 @@ Item {
         var dR = dmin(rx, ry, mx, my)
         var dL = dmin(lx, ly, mx, my)
         var d = dR < dL ? dR : dL
-        inside[y * cols + x] = d < R
-        if (dR < R) grid[y * cols + x] = 1
-        else if (dL < R && dR < R + 1.5) grid[y * cols + x] = 3
-        else if (dL < R) grid[y * cols + x] = 1
+        var inside = d < R
+        var drop = dmin(fx, fy, mx - 1.5, my - 1.5) < R && !inside
+        var cast = inside && dL < R && dR >= R && dR < R + 1.8
+        if (cast) grid[y * cols + x] = 3
+        else if (inside && d >= R - edge) grid[y * cols + x] = 1
+        else if (inside) grid[y * cols + x] = (x % 2 === 0 && y % 2 === 0) ? 2 : 1
+        else if (drop && (x + y) % 2 === 0) grid[y * cols + x] = 2
         else grid[y * cols + x] = 0
       }
     }
-    for (var y2 = 0; y2 < rows; y2++) {
-      for (var x2 = 0; x2 < cols; x2++) {
-        if (grid[y2 * cols + x2] !== 0) continue
-        // Drop shadow: the body sits a little up-left of here.
-        if (dmin(fx, fy, x2 + 0.5 - 1.5, y2 + 0.5 - 1.5) < R) grid[y2 * cols + x2] = 4
+
+    // The head, last, so its outline cuts cleanly across the body's end.
+    for (var hy2 = 0; hy2 < rows; hy2++) {
+      for (var hx2 = 0; hx2 < cols; hx2++) {
+        var hd = (hx2 + 0.5 - hx) * (hx2 + 0.5 - hx) + (hy2 + 0.5 - hy) * (hy2 + 0.5 - hy)
+        if (hd <= 4.4 * 4.4 && hd > 3.3 * 3.3) grid[hy2 * cols + hx2] = 1
+        else if (hd <= 3.3 * 3.3) grid[hy2 * cols + hx2] = (hx2 % 2 === 0 && hy2 % 2 === 0) ? 2 : 1
       }
     }
 
@@ -1412,37 +1419,18 @@ Item {
       for (var xx = 0; xx < cols; xx++) {
         var v = grid[yy * cols + xx]
         if (v === 1) ctx.fillStyle = white
-        else if (v === 3) ctx.fillStyle = grey
-        else if (v === 4) {
-          // The drop shadow stays dithered — it lies on black, where the
-          // checker is the only thing that reads as soft. The cast shadow is
-          // solid: on white, a dithered grey reads as a border, not a shadow.
-          if ((xx + yy) % 2 !== 0) continue
-          ctx.fillStyle = grey
-        } else continue
+        else if (v === 2 || v === 3) ctx.fillStyle = grey
+        else continue
         ctx.fillRect(xx * block, yy * block, block, block)
       }
     }
 
-    // Head: a solid white blob on the right lobe's end, with two black eyes
-    // — the snake biting its own tail, as the reference sets its head.
-    var hx = cx + a
-    var hy = cy
-    for (var hy2 = 0; hy2 < rows; hy2++) {
-      for (var hx2 = 0; hx2 < cols; hx2++) {
-        var ddx = hx2 + 0.5 - hx
-        var ddy = hy2 + 0.5 - hy
-        if (ddx * ddx + ddy * ddy <= 3.4 * 3.4) {
-          ctx.fillStyle = white
-          ctx.fillRect(hx2 * block, hy2 * block, block, block)
-        }
-      }
-    }
+    // Two black eyes, set close together at the front of the head.
     ctx.fillStyle = "#000000"
-    ctx.fillRect((hx + 1) * block - block * 0.2, (hy - 1.6) * block - block * 0.2,
-                 block * 1.2, block * 1.2)
-    ctx.fillRect((hx + 1) * block - block * 0.2, (hy + 1.6) * block - block * 0.2,
-                 block * 1.2, block * 1.2)
+    ctx.fillRect((hx + 1.1) * block, (hy - 1.1) * block - block * 0.55,
+                 block * 1.5, block * 1.1)
+    ctx.fillRect((hx + 1.1) * block, (hy + 1.1) * block - block * 0.55,
+                 block * 1.5, block * 1.1)
   }
 
   function paintBoard(canvas) {
