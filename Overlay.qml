@@ -872,8 +872,8 @@ Item {
       // Sized to the window, not to a fixed block: the logo has to read as a
       // snake from across the room, and a 420px stamp in a 1600px window reads
       // as a smudge. Half the window's width, floor of eight pixels a cell.
-      readonly property int logoBlock: Math.max(8, Math.floor(parent.width * 0.55 / 60))
-      width: 60 * logoBlock
+      readonly property int logoBlock: Math.max(8, Math.floor(parent.width * 0.55 / 66))
+      width: 66 * logoBlock
       height: 34 * logoBlock
       onPaint: root.paintLogo(logoCanvas)
       onVisibleChanged: requestPaint()
@@ -1331,33 +1331,32 @@ Item {
     if (!ctx) return
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // The snake now wears the reference's whole design language, not just its
-    // shape: a SOLID WHITE OUTLINE around the body, a sparse SCALE DITHER
-    // filling it (one grey cell in four), a solid grey SHADOW BAND where the
-    // right strand passes over the left, and a dithered drop shadow under the
-    // whole body. The head is drawn in the same language — outline, scales,
-    // two black eyes — so it reads as a head and not a white smudge.
-    //
-    // The curve is the average of two lemniscates: Gerono's (a real crossing
-    // in the middle, but lens-flat lobes) and Bernoulli's (round teardrop
-    // lobes, but a pinched tangent crossing). Averaged, the snake gets both.
+    // The snake as the first reference draws it: nothing but a WHITE OUTLINE.
+    // No fill, no scales, no shadows — just the contour of the body, two
+    // parallel lines with black between them, and a properly drawn head:
+    // a round skull and a pointed snout, eyes on the skull, a forked tongue.
+    // The shape is the second reference's figure-8, laid flat. Where the body
+    // crosses, the right strand is on top and the left strand's outline is
+    // broken — you can see the over-under. And the head sits over the strand
+    // it is eating: the body outline simply stops where the head covers it,
+    // so the tail vanishes under the head and the head reads clear.
     var block = canvas.logoBlock
-    var cols = 60
+    var cols = 66
     var rows = 34
     var cx = (cols - 1) / 2
     var cy = (rows - 1) / 2
-    var R = 3.8         // body radius in cells
-    var edge = 1.1      // solid outline ring, in cells
-    var hx = cx + 26    // the head sits on the right lobe's tip
-    var hy = cy
+    var R = 3.6         // body radius in cells
+    var edge = 1.1      // outline band, in cells
+    var hx = cx + 13    // the head, inside the right lobe, facing the crossing
+    var hy = cy - 1
 
+    // The curve: Gerono averaged with Bernoulli — Gerono gives the crossing,
+    // Bernoulli gives the round lobes.
     var N = 800
     var rx = []
     var ry = []
     var lx = []
     var ly = []
-    var fx = []
-    var fy = []
     for (var i = 0; i <= N; i++) {
       var t = i / N * 2 * Math.PI
       var gx = cx + 26 * Math.cos(t)
@@ -1367,7 +1366,6 @@ Item {
       var by = cy + 26 * Math.sin(t) * Math.cos(t) / s
       var px = (gx + bx) / 2
       var py = (gy + by) / 2
-      fx.push(px); fy.push(py)
       if (px >= cx) { rx.push(px); ry.push(py) }
       else { lx.push(px); ly.push(py) }
     }
@@ -1383,54 +1381,77 @@ Item {
       return Math.sqrt(best)
     }
 
-    // Classify every cell once: 0 empty, 1 white, 2 grey (a scale or the
-    // drop dither), 3 the solid cast shadow band.
-    var grid = []
+    // The head is a circle (the skull) joined to a triangle (the snout),
+    // facing left. Signed distance: negative inside.
+    var skx = hx + 2.5
+    var sky = hy
+    var skr = 4.6
+    function segd(px, py, ax, ay, bx, by) {
+      var dx = bx - ax
+      var dy = by - ay
+      var l2 = dx * dx + dy * dy
+      var u = ((px - ax) * dx + (py - ay) * dy) / l2
+      if (u < 0) u = 0
+      if (u > 1) u = 1
+      return Math.sqrt((px - (ax + u * dx)) * (px - (ax + u * dx)) +
+                       (py - (ay + u * dy)) * (py - (ay + u * dy)))
+    }
+    function trid(mx, my) {
+      var x1 = hx + 2.5, y1 = hy - 4.6
+      var x2 = hx + 2.5, y2 = hy + 4.6
+      var x3 = hx - 6.5, y3 = hy
+      var d1 = (mx - x1) * (y2 - y1) - (my - y1) * (x2 - x1)
+      var d2 = (mx - x2) * (y3 - y2) - (my - y2) * (x3 - x2)
+      var d3 = (mx - x3) * (y1 - y3) - (my - y3) * (x1 - x3)
+      var neg = (d1 < 0) || (d2 < 0) || (d3 < 0)
+      var pos = (d1 > 0) || (d2 > 0) || (d3 > 0)
+      var inside = !(neg && pos)
+      var d = segd(mx, my, x1, y1, x2, y2)
+      var e = segd(mx, my, x2, y2, x3, y3)
+      if (e < d) d = e
+      e = segd(mx, my, x3, y3, x1, y1)
+      if (e < d) d = e
+      return inside ? -d : d
+    }
+    function headd(mx, my) {
+      var dc = Math.sqrt((mx - skx) * (mx - skx) + (my - sky) * (my - sky)) - skr
+      var dt = trid(mx, my)
+      return dc < dt ? dc : dt
+    }
+
+    // Body outline first: the right strand's contour is whole, the left
+    // strand's contour breaks where the right tube passes over it.
+    ctx.fillStyle = "#ffffff"
     for (var y = 0; y < rows; y++) {
       for (var x = 0; x < cols; x++) {
         var mx = x + 0.5
         var my = y + 0.5
         var dR = dmin(rx, ry, mx, my)
         var dL = dmin(lx, ly, mx, my)
-        var d = dR < dL ? dR : dL
-        var inside = d < R
-        var drop = dmin(fx, fy, mx - 1.5, my - 1.5) < R && !inside
-        var cast = inside && dL < R && dR >= R && dR < R + 1.8
-        if (cast) grid[y * cols + x] = 3
-        else if (inside && d >= R - edge) grid[y * cols + x] = 1
-        else if (inside) grid[y * cols + x] = (x % 2 === 0 && y % 2 === 0) ? 2 : 1
-        else if (drop && (x + y) % 2 === 0) grid[y * cols + x] = 2
-        else grid[y * cols + x] = 0
+        var outR = dR >= R - edge && dR < R
+        var outL = dL >= R - edge && dL < R && dR >= R
+        if (outR || outL) ctx.fillRect(x * block, y * block, block, block)
       }
     }
 
-    // The head, last, so its outline cuts cleanly across the body's end.
-    for (var hy2 = 0; hy2 < rows; hy2++) {
-      for (var hx2 = 0; hx2 < cols; hx2++) {
-        var hd = (hx2 + 0.5 - hx) * (hx2 + 0.5 - hx) + (hy2 + 0.5 - hy) * (hy2 + 0.5 - hy)
-        if (hd <= 4.4 * 4.4 && hd > 3.3 * 3.3) grid[hy2 * cols + hx2] = 1
-        else if (hd <= 3.3 * 3.3) grid[hy2 * cols + hx2] = (hx2 % 2 === 0 && hy2 % 2 === 0) ? 2 : 1
+    // The head, drawn over the body: inside the head the body is erased, and
+    // the head's own contour is painted.
+    for (var y2 = 0; y2 < rows; y2++) {
+      for (var x2 = 0; x2 < cols; x2++) {
+        var hd = headd(x2 + 0.5, y2 + 0.5)
+        if (hd < 0) ctx.clearRect(x2 * block, y2 * block, block, block)
+        else if (hd < 0.65) ctx.fillRect(x2 * block, y2 * block, block, block)
       }
     }
 
-    var white = "#ffffff"
-    var grey = "#d6d6d6"
-    for (var yy = 0; yy < rows; yy++) {
-      for (var xx = 0; xx < cols; xx++) {
-        var v = grid[yy * cols + xx]
-        if (v === 1) ctx.fillStyle = white
-        else if (v === 2 || v === 3) ctx.fillStyle = grey
-        else continue
-        ctx.fillRect(xx * block, yy * block, block, block)
-      }
+    // Eyes on the skull, and a forked tongue from the snout.
+    ctx.fillRect(Math.floor(hx + 3.5) * block, (hy - 2.4) * block, block, block)
+    ctx.fillRect(Math.floor(hx + 3.5) * block, (hy + 2.4) * block, block, block)
+    for (var tx = Math.floor(hx - 11); tx <= Math.floor(hx - 7); tx++) {
+      ctx.fillRect(tx * block, hy * block, block, block)
     }
-
-    // Two black eyes, set close together at the front of the head.
-    ctx.fillStyle = "#000000"
-    ctx.fillRect((hx + 1.1) * block, (hy - 1.1) * block - block * 0.55,
-                 block * 1.5, block * 1.1)
-    ctx.fillRect((hx + 1.1) * block, (hy + 1.1) * block - block * 0.55,
-                 block * 1.5, block * 1.1)
+    ctx.fillRect(Math.floor(hx - 12) * block, (hy - 1) * block, block, block)
+    ctx.fillRect(Math.floor(hx - 12) * block, (hy + 1) * block, block, block)
   }
 
   function paintBoard(canvas) {
