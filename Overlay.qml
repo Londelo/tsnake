@@ -872,9 +872,9 @@ Item {
       // Sized to the window, not to a fixed block: the logo has to read as a
       // snake from across the room, and a 420px stamp in a 1600px window reads
       // as a smudge. Half the window's width, floor of eight pixels a cell.
-      readonly property int logoBlock: Math.max(8, Math.floor(parent.width * 0.55 / 66))
-      width: 66 * logoBlock
-      height: 34 * logoBlock
+      readonly property int logoBlock: Math.max(5, Math.floor(parent.width * 0.55 / 110))
+      width: 110 * logoBlock
+      height: 56 * logoBlock
       onPaint: root.paintLogo(logoCanvas)
       onVisibleChanged: requestPaint()
       onWidthChanged: requestPaint()
@@ -1331,24 +1331,26 @@ Item {
     if (!ctx) return
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // The snake as the first reference draws it: nothing but a WHITE OUTLINE.
-    // No fill, no scales, no shadows — just the contour of the body, two
-    // parallel lines with black between them, and a properly drawn head:
-    // a round skull and a pointed snout, eyes on the skull, a forked tongue.
+    // The snake as the first reference draws it: nothing but a WHITE OUTLINE,
+    // now on a finer mesh — 110 x 56 cells instead of 66 x 34 — so every line
+    // is a single cell thick and the whole drawing carries more detail: eyes,
+    // a forked tongue, a head whose snout tapers clean to a point.
+    //
     // The shape is the second reference's figure-8, laid flat. Where the body
     // crosses, the right strand is on top and the left strand's outline is
-    // broken — you can see the over-under. And the head sits over the strand
-    // it is eating: the body outline simply stops where the head covers it,
-    // so the tail vanishes under the head and the head reads clear.
+    // broken — you can see the over-under. The head is the union of a skull
+    // circle and a snout triangle, drawn as one silhouette: the body outline
+    // simply stops where the head covers it, so the tail vanishes under the
+    // head and the head reads clear.
     var block = canvas.logoBlock
-    var cols = 66
-    var rows = 34
+    var cols = 110
+    var rows = 56
     var cx = (cols - 1) / 2
     var cy = (rows - 1) / 2
-    var R = 3.6         // body radius in cells
-    var edge = 1.1      // outline band, in cells
-    var hx = cx + 13    // the head, inside the right lobe, facing the crossing
-    var hy = cy - 1
+    var R = 6.0         // body radius in cells
+    var edge = 1.0      // outline band — one cell, so the lines are thin
+    var hx = cx + 21.5  // the head, inside the right lobe, facing the crossing
+    var hy = cy - 1.5
 
     // The curve: Gerono averaged with Bernoulli — Gerono gives the crossing,
     // Bernoulli gives the round lobes.
@@ -1359,18 +1361,20 @@ Item {
     var ly = []
     for (var i = 0; i <= N; i++) {
       var t = i / N * 2 * Math.PI
-      var gx = cx + 26 * Math.cos(t)
-      var gy = cy + 17 * Math.sin(t) * Math.cos(t)
+      var gx = cx + 43 * Math.cos(t)
+      var gy = cy + 28 * Math.sin(t) * Math.cos(t)
       var s = 1 + Math.sin(t) * Math.sin(t)
-      var bx = cx + 26 * Math.cos(t) / s
-      var by = cy + 26 * Math.sin(t) * Math.cos(t) / s
+      var bx = cx + 43 * Math.cos(t) / s
+      var by = cy + 43 * Math.sin(t) * Math.cos(t) / s
       var px = (gx + bx) / 2
       var py = (gy + by) / 2
       if (px >= cx) { rx.push(px); ry.push(py) }
       else { lx.push(px); ly.push(py) }
     }
 
-    function dmin(ax, ay, mx, my) {
+    var R2 = R * R
+    var E2 = (R - edge) * (R - edge)
+    function dmin2(ax, ay, mx, my) {
       var best = 1e18
       for (var s2 = 0; s2 < ax.length; s2++) {
         var dx = mx - ax[s2]
@@ -1378,14 +1382,36 @@ Item {
         var d2 = dx * dx + dy * dy
         if (d2 < best) best = d2
       }
-      return Math.sqrt(best)
+      return best
     }
 
-    // The head is a circle (the skull) joined to a triangle (the snout),
-    // facing left. Signed distance: negative inside.
-    var skx = hx + 2.5
+    // Body outline: the right strand's contour is whole, the left strand's
+    // contour breaks where the right tube passes over it.
+    ctx.fillStyle = "#ffffff"
+    for (var y = 0; y < rows; y++) {
+      for (var x = 0; x < cols; x++) {
+        var mx = x + 0.5
+        var my = y + 0.5
+        var dR = dmin2(rx, ry, mx, my)
+        var outR = dR >= E2 && dR < R2
+        var outL = false
+        if (!outR) {
+          var dL = dmin2(lx, ly, mx, my)
+          outL = dL >= E2 && dL < R2 && dR >= R2
+        }
+        if (outR || outL) ctx.fillRect(x * block, y * block, block, block)
+      }
+    }
+
+    // The head: skull circle joined to a snout triangle. Its silhouette is
+    // the circle's arc where the snout doesn't cover it, plus the two snout
+    // lines where they clear the skull. Inside the union the body is erased.
+    var skx = hx + 7.0
     var sky = hy
-    var skr = 4.6
+    var skr = 7.0
+    var x1 = hx + 7.0, y1 = hy - 7.0
+    var x2 = hx + 7.0, y2 = hy + 7.0
+    var x3 = hx - 13.0, y3 = hy
     function segd(px, py, ax, ay, bx, by) {
       var dx = bx - ax
       var dy = by - ay
@@ -1396,62 +1422,44 @@ Item {
       return Math.sqrt((px - (ax + u * dx)) * (px - (ax + u * dx)) +
                        (py - (ay + u * dy)) * (py - (ay + u * dy)))
     }
-    function trid(mx, my) {
-      var x1 = hx + 2.5, y1 = hy - 4.6
-      var x2 = hx + 2.5, y2 = hy + 4.6
-      var x3 = hx - 6.5, y3 = hy
+    function triIn(mx, my) {
       var d1 = (mx - x1) * (y2 - y1) - (my - y1) * (x2 - x1)
       var d2 = (mx - x2) * (y3 - y2) - (my - y2) * (x3 - x2)
       var d3 = (mx - x3) * (y1 - y3) - (my - y3) * (x1 - x3)
       var neg = (d1 < 0) || (d2 < 0) || (d3 < 0)
       var pos = (d1 > 0) || (d2 > 0) || (d3 > 0)
-      var inside = !(neg && pos)
-      var d = segd(mx, my, x1, y1, x2, y2)
-      var e = segd(mx, my, x2, y2, x3, y3)
-      if (e < d) d = e
-      e = segd(mx, my, x3, y3, x1, y1)
-      if (e < d) d = e
-      return inside ? -d : d
+      return !(neg && pos)
     }
-    function headd(mx, my) {
-      var dc = Math.sqrt((mx - skx) * (mx - skx) + (my - sky) * (my - sky)) - skr
-      var dt = trid(mx, my)
-      return dc < dt ? dc : dt
-    }
-
-    // Body outline first: the right strand's contour is whole, the left
-    // strand's contour breaks where the right tube passes over it.
-    ctx.fillStyle = "#ffffff"
-    for (var y = 0; y < rows; y++) {
-      for (var x = 0; x < cols; x++) {
-        var mx = x + 0.5
-        var my = y + 0.5
-        var dR = dmin(rx, ry, mx, my)
-        var dL = dmin(lx, ly, mx, my)
-        var outR = dR >= R - edge && dR < R
-        var outL = dL >= R - edge && dL < R && dR >= R
-        if (outR || outL) ctx.fillRect(x * block, y * block, block, block)
-      }
-    }
-
-    // The head, drawn over the body: inside the head the body is erased, and
-    // the head's own contour is painted.
-    for (var y2 = 0; y2 < rows; y2++) {
-      for (var x2 = 0; x2 < cols; x2++) {
-        var hd = headd(x2 + 0.5, y2 + 0.5)
-        if (hd < 0) ctx.clearRect(x2 * block, y2 * block, block, block)
-        else if (hd < 0.65) ctx.fillRect(x2 * block, y2 * block, block, block)
+    var band = 1.1
+    for (var yy = Math.floor(hy - 10); yy <= Math.floor(hy + 11); yy++) {
+      for (var xx = Math.floor(hx - 14); xx <= Math.floor(hx + 14); xx++) {
+        var mx2 = xx + 0.5
+        var my2 = yy + 0.5
+        var dc = Math.sqrt((mx2 - skx) * (mx2 - skx) +
+                           (my2 - sky) * (my2 - sky)) - skr
+        var tin = triIn(mx2, my2)
+        if (dc < 0 || tin) {
+          ctx.clearRect(xx * block, yy * block, block, block)
+          continue
+        }
+        var nearS = segd(mx2, my2, x1, y1, x3, y3) < band ||
+                    segd(mx2, my2, x2, y2, x3, y3) < band
+        if ((Math.abs(dc) < band && !tin) || (nearS && dc >= 0)) {
+          ctx.fillRect(xx * block, yy * block, block, block)
+        }
       }
     }
 
     // Eyes on the skull, and a forked tongue from the snout.
-    ctx.fillRect(Math.floor(hx + 3.5) * block, (hy - 2.4) * block, block, block)
-    ctx.fillRect(Math.floor(hx + 3.5) * block, (hy + 2.4) * block, block, block)
-    for (var tx = Math.floor(hx - 11); tx <= Math.floor(hx - 7); tx++) {
+    ctx.fillRect(Math.floor(hx + 9.0) * block, (hy - 3.0) * block,
+                 2 * block, 2 * block)
+    ctx.fillRect(Math.floor(hx + 9.0) * block, (hy + 1.0) * block,
+                 2 * block, 2 * block)
+    for (var tx = Math.floor(hx - 18); tx <= Math.floor(hx - 13); tx++) {
       ctx.fillRect(tx * block, hy * block, block, block)
     }
-    ctx.fillRect(Math.floor(hx - 12) * block, (hy - 1) * block, block, block)
-    ctx.fillRect(Math.floor(hx - 12) * block, (hy + 1) * block, block, block)
+    ctx.fillRect(Math.floor(hx - 20) * block, (hy - 1) * block, 2 * block, block)
+    ctx.fillRect(Math.floor(hx - 20) * block, (hy + 1) * block, 2 * block, block)
   }
 
   function paintBoard(canvas) {
