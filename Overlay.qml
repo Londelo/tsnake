@@ -1331,26 +1331,20 @@ Item {
     if (!ctx) return
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // The snake as the first reference draws it: nothing but a WHITE OUTLINE,
-    // now on a finer mesh — 110 x 56 cells instead of 66 x 34 — so every line
-    // is a single cell thick and the whole drawing carries more detail: eyes,
-    // a forked tongue, a head whose snout tapers clean to a point.
-    //
-    // The shape is the second reference's figure-8, laid flat. Where the body
-    // crosses, the right strand is on top and the left strand's outline is
-    // broken — you can see the over-under. The head is the union of a skull
-    // circle and a snout triangle, drawn as one silhouette: the body outline
-    // simply stops where the head covers it, so the tail vanishes under the
-    // head and the head reads clear.
+    // The ouroboros, fine mesh (110 x 56 cells), pure white outline. The head
+    // now sits AT THE CROSSING, horizontal, tip pointing left — the second
+    // reference's pose, laid flat. It is bigger than the body (20 cells tall
+    // against the body's 12), it covers the crossing itself, and a black moat
+    // of two cells around its silhouette erases the body outline nearby — so
+    // the head unmistakably lies OVER the tail it is eating, and the four
+    // strands of the crossing emerge from behind it at clean angles.
     var block = canvas.logoBlock
     var cols = 110
     var rows = 56
     var cx = (cols - 1) / 2
     var cy = (rows - 1) / 2
-    var R = 6.0         // body radius in cells
-    var edge = 1.0      // outline band — one cell, so the lines are thin
-    var hx = cx + 21.5  // the head, inside the right lobe, facing the crossing
-    var hy = cy - 1.5
+    var R = 6.0
+    var edge = 1.0
 
     // The curve: Gerono averaged with Bernoulli — Gerono gives the crossing,
     // Bernoulli gives the round lobes.
@@ -1403,15 +1397,16 @@ Item {
       }
     }
 
-    // The head: skull circle joined to a snout triangle. Its silhouette is
-    // the circle's arc where the snout doesn't cover it, plus the two snout
-    // lines where they clear the skull. Inside the union the body is erased.
-    var skx = hx + 7.0
-    var sky = hy
-    var skr = 7.0
-    var x1 = hx + 7.0, y1 = hy - 7.0
-    var x2 = hx + 7.0, y2 = hy + 7.0
-    var x3 = hx - 13.0, y3 = hy
+    // The head: skull circle (round back, right of the crossing) joined to a
+    // snout triangle whose tip is left of the crossing. Signed distance to
+    // the union: inside erases the body, the band paints the outline, and
+    // the moat erases any body outline that came too close to the head.
+    var skx = cx + 10.0
+    var sky = cy
+    var skr = 10.0
+    var x1 = cx + 10.0, y1 = cy - 10.0
+    var x2 = cx + 10.0, y2 = cy + 10.0
+    var x3 = cx - 18.0, y3 = cy
     function segd(px, py, ax, ay, bx, by) {
       var dx = bx - ax
       var dy = by - ay
@@ -1431,35 +1426,39 @@ Item {
       return !(neg && pos)
     }
     var band = 1.1
-    for (var yy = Math.floor(hy - 10); yy <= Math.floor(hy + 11); yy++) {
-      for (var xx = Math.floor(hx - 14); xx <= Math.floor(hx + 14); xx++) {
+    var moat = 2.2
+    for (var yy = Math.floor(cy - 14); yy <= Math.floor(cy + 14); yy++) {
+      for (var xx = Math.floor(cx - 22); xx <= Math.floor(cx + 23); xx++) {
         var mx2 = xx + 0.5
         var my2 = yy + 0.5
         var dc = Math.sqrt((mx2 - skx) * (mx2 - skx) +
                            (my2 - sky) * (my2 - sky)) - skr
         var tin = triIn(mx2, my2)
-        if (dc < 0 || tin) {
-          ctx.clearRect(xx * block, yy * block, block, block)
-          continue
-        }
-        var nearS = segd(mx2, my2, x1, y1, x3, y3) < band ||
-                    segd(mx2, my2, x2, y2, x3, y3) < band
-        if ((Math.abs(dc) < band && !tin) || (nearS && dc >= 0)) {
-          ctx.fillRect(xx * block, yy * block, block, block)
-        }
+        var d = segd(mx2, my2, x1, y1, x3, y3)
+        var e = segd(mx2, my2, x2, y2, x3, y3)
+        if (e < d) d = e
+        e = segd(mx2, my2, x3, y3, x1, y1)
+        if (e < d) d = e
+        var dt = tin ? -d : d
+        var hd = dc < dt ? dc : dt
+        if (hd < 0) ctx.clearRect(xx * block, yy * block, block, block)
+        else if (hd < band) ctx.fillRect(xx * block, yy * block, block, block)
+        else if (hd < moat) ctx.clearRect(xx * block, yy * block, block, block)
       }
     }
 
-    // Eyes on the skull, and a forked tongue from the snout.
-    ctx.fillRect(Math.floor(hx + 9.0) * block, (hy - 3.0) * block,
-                 2 * block, 2 * block)
-    ctx.fillRect(Math.floor(hx + 9.0) * block, (hy + 1.0) * block,
-                 2 * block, 2 * block)
-    for (var tx = Math.floor(hx - 18); tx <= Math.floor(hx - 13); tx++) {
-      ctx.fillRect(tx * block, hy * block, block, block)
+    // Eyes on the skull, and a forked tongue from the snout tip.
+    ctx.fillRect(Math.floor(cx + 13.5) * block, Math.floor(cy - 3.5) * block,
+                 3 * block, 3 * block)
+    ctx.fillRect(Math.floor(cx + 13.5) * block, Math.floor(cy + 1.5) * block,
+                 3 * block, 3 * block)
+    for (var tx = Math.floor(cx - 24.5); tx <= Math.floor(cx - 19.5); tx++) {
+      ctx.fillRect(tx * block, Math.floor(cy + 0.5) * block, block, block)
     }
-    ctx.fillRect(Math.floor(hx - 20) * block, (hy - 1) * block, 2 * block, block)
-    ctx.fillRect(Math.floor(hx - 20) * block, (hy + 1) * block, 2 * block, block)
+    ctx.fillRect(Math.floor(cx - 26.5) * block, Math.floor(cy - 1.5) * block,
+                 2 * block, block)
+    ctx.fillRect(Math.floor(cx - 26.5) * block, Math.floor(cy + 1.5) * block,
+                 2 * block, block)
   }
 
   function paintBoard(canvas) {
