@@ -861,8 +861,8 @@ Item {
     }
 
     // The black screen is not empty-empty: while the engine builds and forks,
-    // a blocky white snake traces an infinity loop in the middle of it — the
-    // pixel ouroboros, same language as the board. It retires the instant the
+    // SNAKE stands in blocky letters with a snake slithering down over the S,
+    // same language as the board. It retires the instant the
     // first frame lands, and steps aside for the error panel if no frame ever
     // does (the same gotFrame gate that holds the board back).
     Canvas {
@@ -1320,145 +1320,138 @@ Item {
   // pair 1 green (food, eat flash), pair 2 white (body), pair 3 red (corpse)
   // plus its A_BOLD red-orange (hunt border). Pair 4 yellow is the same
   // argument up in hudRight.
-  // The black-screen logo: a white snake tracing an infinity loop — an ouroboros
-  // in pixels, the same blocky language the board paints with. The curve is a
-  // lemniscate of Gerono (x = cos t, y = sin t cos t) sampled onto the grid;
-  // every cell it lands in becomes one white block, and the head sits on the
-  // loop where the tail crosses, biting it. No engine, no frame, nothing
-  // invented — this is the honest face of "still starting".
+  // The black-screen logo: SNAKE set in blocky letters, with a snake slithering
+  // down over the first letter. Same language as the board — white blocks on
+  // black, one cell per block. The letters are a 5x7 pixel font scaled by three;
+  // the crawler is a damped sine sampled onto the grid, so it straightens as it
+  // descends and the head leaves the word pointing down. It is a solid white
+  // body with a black halo, which is what makes it read as lying OVER the word
+  // rather than woven into it. No engine, no frame, nothing invented — this is
+  // the honest face of "still starting".
   function paintLogo(canvas) {
     var ctx = canvas.getContext("2d")
     if (!ctx) return
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // The ouroboros, fine mesh (110 x 56 cells), pure white outline. The head
-    // now sits AT THE CROSSING, horizontal, tip pointing left — the second
-    // reference's pose, laid flat. It is bigger than the body (20 cells tall
-    // against the body's 12), it covers the crossing itself, and a black moat
-    // of two cells around its silhouette erases the body outline nearby — so
-    // the head unmistakably lies OVER the tail it is eating, and the four
-    // strands of the crossing emerge from behind it at clean angles.
     var block = canvas.logoBlock
     var cols = 110
     var rows = 56
-    var cx = (cols - 1) / 2
-    var cy = (rows - 1) / 2
-    var R = 6.0
-    var edge = 1.0
-
-    // The curve: Gerono averaged with Bernoulli — Gerono gives the crossing,
-    // Bernoulli gives the round lobes.
-    var N = 800
-    var rx = []
-    var ry = []
-    var lx = []
-    var ly = []
-    for (var i = 0; i <= N; i++) {
-      var t = i / N * 2 * Math.PI
-      var gx = cx + 43 * Math.cos(t)
-      var gy = cy + 28 * Math.sin(t) * Math.cos(t)
-      var s = 1 + Math.sin(t) * Math.sin(t)
-      var bx = cx + 43 * Math.cos(t) / s
-      var by = cy + 43 * Math.sin(t) * Math.cos(t) / s
-      var px = (gx + bx) / 2
-      var py = (gy + by) / 2
-      if (px >= cx) { rx.push(px); ry.push(py) }
-      else { lx.push(px); ly.push(py) }
+    var sc = 3
+    var glyphs = {
+      "S": [".###.", "#...#", "#....", ".##..", "...#.", "#...#", ".###."],
+      "N": ["#...#", "##..#", "##..#", "#.#.#", "#..##", "#..##", "#...#"],
+      "A": [".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+      "K": ["#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"],
+      "E": ["#####", "#....", "#....", "####.", "#....", "#....", "#####"]
     }
+    var word = "SNAKE"
+    var gw = 5
+    var gh = 7
+    var gap = 2 * sc
+    var wordW = word.length * gw * sc + (word.length - 1) * gap
+    var x0 = Math.round((cols - wordW) / 2)
+    var y0 = Math.round((rows - gh * sc) / 2)
 
-    var R2 = R * R
-    var E2 = (R - edge) * (R - edge)
-    function dmin2(ax, ay, mx, my) {
-      var best = 1e18
-      for (var s2 = 0; s2 < ax.length; s2++) {
-        var dx = mx - ax[s2]
-        var dy = my - ay[s2]
-        var d2 = dx * dx + dy * dy
-        if (d2 < best) best = d2
-      }
-      return best
-    }
-
-    // Body outline: the right strand's contour is whole, the left strand's
-    // contour breaks where the right tube passes over it.
     ctx.fillStyle = "#ffffff"
-    for (var y = 0; y < rows; y++) {
-      for (var x = 0; x < cols; x++) {
-        var mx = x + 0.5
-        var my = y + 0.5
-        var dR = dmin2(rx, ry, mx, my)
-        var outR = dR >= E2 && dR < R2
-        var outL = false
-        if (!outR) {
-          var dL = dmin2(lx, ly, mx, my)
-          outL = dL >= E2 && dL < R2 && dR >= R2
+    for (var li = 0; li < word.length; li++) {
+      var g = glyphs[word.charAt(li)]
+      var ox = x0 + li * (gw * sc + gap)
+      for (var fy = 0; fy < gh; fy++) {
+        var glyphRow = g[fy]
+        for (var fx = 0; fx < gw; fx++) {
+          if (glyphRow.charAt(fx) === "#")
+            ctx.fillRect((ox + fx * sc) * block, (y0 + fy * sc) * block,
+                         sc * block, sc * block)
         }
-        if (outR || outL) ctx.fillRect(x * block, y * block, block, block)
       }
     }
 
-    // The head: skull circle (round back, right of the crossing) joined to a
-    // snout triangle whose tip is left of the crossing. Signed distance to
-    // the union: inside erases the body, the band paints the outline, and
-    // the moat erases any body outline that came too close to the head.
-    var skx = cx + 10.0
-    var sky = cy
-    var skr = 10.0
-    var x1 = cx + 10.0, y1 = cy - 10.0
-    var x2 = cx + 10.0, y2 = cy + 10.0
-    var x3 = cx - 18.0, y3 = cy
-    function segd(px, py, ax, ay, bx, by) {
-      var dx = bx - ax
-      var dy = by - ay
-      var l2 = dx * dx + dy * dy
-      var u = ((px - ax) * dx + (py - ay) * dy) / l2
-      if (u < 0) u = 0
-      if (u > 1) u = 1
-      return Math.sqrt((px - (ax + u * dx)) * (px - (ax + u * dx)) +
-                       (py - (ay + u * dy)) * (py - (ay + u * dy)))
+    // The crawler, over the S. A damped sine: it swings at the tail and
+    // straightens as it falls, so the head leaves the word pointing down. It is
+    // a SOLID body, not a contour — at this size a two-cell-wide tube reads as
+    // wire, and the letters need to be erased behind it, not woven around it.
+    // It has to fit the S's own box. Wider than half the glyph and it stands
+    // beside the word instead of on it; taller than the glyph and it is a
+    // separate creature, which is the whole thing the cover has to avoid.
+    var sx = x0 + gw * sc / 2
+    var yTop = y0 - 2
+    var yBot = y0 + gh * sc + 2
+    var amp = 2.2
+    var bodyR = 1.65
+    var headR = 2.4
+    var samples = 160
+    var pathX = []
+    var pathY = []
+    for (var i = 0; i <= samples; i++) {
+      var t = i / samples
+      pathX.push(sx + amp * (1 - 0.55 * t) * Math.sin(2 * Math.PI * t))
+      pathY.push(yTop + (yBot - yTop) * t)
     }
-    function triIn(mx, my) {
-      var d1 = (mx - x1) * (y2 - y1) - (my - y1) * (x2 - x1)
-      var d2 = (mx - x2) * (y3 - y2) - (my - y2) * (x3 - x2)
-      var d3 = (mx - x3) * (y1 - y3) - (my - y3) * (x1 - x3)
-      var neg = (d1 < 0) || (d2 < 0) || (d3 < 0)
-      var pos = (d1 > 0) || (d2 > 0) || (d3 > 0)
-      return !(neg && pos)
+
+    var ex = pathX[samples]
+    var ey = pathY[samples]
+    var tanx = ex - pathX[samples - 1]
+    var tany = ey - pathY[samples - 1]
+    var tanLen = Math.sqrt(tanx * tanx + tany * tany)
+    var ux = tanx / tanLen
+    var uy = tany / tanLen
+    var nx = -uy
+    var ny = ux
+    var hx = ex + ux * 3.0
+    var hy = ey + uy * 3.0
+
+    // Signed distance to the union of body and head — union is the MINIMUM,
+    // which is what makes a cell inside the tail count as inside the snake even
+    // though it is far from the head. Body radius tapers from a thin tail to
+    // the neck. Negative is inside.
+    function snakeDist(mx, my) {
+      var best = 1e18
+      var bestT = 0
+      for (var s = 0; s < samples; s++) {
+        var ax = pathX[s]
+        var ay = pathY[s]
+        var dx = pathX[s + 1] - ax
+        var dy = pathY[s + 1] - ay
+        var l2 = dx * dx + dy * dy
+        var u = l2 > 0 ? ((mx - ax) * dx + (my - ay) * dy) / l2 : 0
+        if (u < 0) u = 0
+        if (u > 1) u = 1
+        var qx = ax + u * dx
+        var qy = ay + u * dy
+        var d = Math.sqrt((mx - qx) * (mx - qx) + (my - qy) * (my - qy))
+        if (d < best) {
+          best = d
+          bestT = (s + u) / samples
+        }
+      }
+      var sd = best - bodyR * (0.45 + 0.55 * bestT)
+      var hd = Math.sqrt((mx - hx) * (mx - hx) + (my - hy) * (my - hy)) - headR
+      return hd < sd ? hd : sd
     }
-    var band = 1.1
-    var moat = 2.2
-    for (var yy = Math.floor(cy - 14); yy <= Math.floor(cy + 14); yy++) {
-      for (var xx = Math.floor(cx - 22); xx <= Math.floor(cx + 23); xx++) {
-        var mx2 = xx + 0.5
-        var my2 = yy + 0.5
-        var dc = Math.sqrt((mx2 - skx) * (mx2 - skx) +
-                           (my2 - sky) * (my2 - sky)) - skr
-        var tin = triIn(mx2, my2)
-        var d = segd(mx2, my2, x1, y1, x3, y3)
-        var e = segd(mx2, my2, x2, y2, x3, y3)
-        if (e < d) d = e
-        e = segd(mx2, my2, x3, y3, x1, y1)
-        if (e < d) d = e
-        var dt = tin ? -d : d
-        var hd = dc < dt ? dc : dt
-        if (hd < 0) ctx.clearRect(xx * block, yy * block, block, block)
-        else if (hd < band) ctx.fillRect(xx * block, yy * block, block, block)
-        else if (hd < moat) ctx.clearRect(xx * block, yy * block, block, block)
+
+    var moat = 1.0
+    var xlo = Math.max(0, Math.floor(sx - amp - headR - 2))
+    var xhi = Math.min(cols - 1, Math.ceil(sx + amp + headR + 2))
+    var ylo = Math.max(0, Math.floor(yTop - 2))
+    var yhi = Math.min(rows - 1, Math.ceil(yBot + headR + 4))
+    for (var yy = ylo; yy <= yhi; yy++) {
+      for (var xx = xlo; xx <= xhi; xx++) {
+        var sd = snakeDist(xx + 0.5, yy + 0.5)
+        if (sd < 0) ctx.fillRect(xx * block, yy * block, block, block)
+        else if (sd < moat) ctx.clearRect(xx * block, yy * block, block, block)
       }
     }
 
-    // Eyes on the skull, and a forked tongue from the snout tip.
-    ctx.fillRect(Math.floor(cx + 13.5) * block, Math.floor(cy - 3.5) * block,
-                 3 * block, 3 * block)
-    ctx.fillRect(Math.floor(cx + 13.5) * block, Math.floor(cy + 1.5) * block,
-                 3 * block, 3 * block)
-    for (var tx = Math.floor(cx - 24.5); tx <= Math.floor(cx - 19.5); tx++) {
-      ctx.fillRect(tx * block, Math.floor(cy + 0.5) * block, block, block)
-    }
-    ctx.fillRect(Math.floor(cx - 26.5) * block, Math.floor(cy - 1.5) * block,
-                 2 * block, block)
-    ctx.fillRect(Math.floor(cx - 26.5) * block, Math.floor(cy + 1.5) * block,
-                 2 * block, block)
+    // The eye is a hole punched in the head, and the tongue a white fork off
+    // the snout.
+    ctx.clearRect(Math.floor(hx + nx * 1.7) * block, Math.floor(hy + ny * 1.7) * block,
+                  block, block)
+    var mx0 = Math.round(hx)
+    var my0 = Math.round(hy + headR)
+    ctx.fillRect(mx0 * block, my0 * block, block, block)
+    ctx.fillRect(mx0 * block, (my0 + 1) * block, block, block)
+    ctx.fillRect((mx0 - 1) * block, (my0 + 2) * block, block, block)
+    ctx.fillRect((mx0 + 1) * block, (my0 + 2) * block, block, block)
   }
 
   function paintBoard(canvas) {
@@ -1477,8 +1470,8 @@ Item {
     ctx.fillRect(left, top, cell * bw, cell * bh)
 
     // Border priority straight off draw(): flash outranks hunt; hunt is the
-    // red-orange AUTO HUNT warning; otherwise the theme's plain border.
-    var border = Color.menu.border.toString()
+    // red-orange AUTO HUNT warning; otherwise white.
+    var border = "#ffffff"
     if (root.flash > 0) border = "#41d158"
     else if (root.huntOn === 1) border = "#ff7043"
     ctx.strokeStyle = border
