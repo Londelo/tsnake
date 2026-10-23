@@ -25,9 +25,9 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "tsnake"
+    text: "snake"
     horizontalMargin: 7.5
-    tooltipText: "Play tsnake"
+    tooltipText: "Play snake"
     onPressed: function(button) {
       if (!root.bar) return
       else root.bar.run("omarchy-shell shell toggle io.github.londelo.tsnake '{}'")
