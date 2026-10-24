@@ -795,17 +795,12 @@ static chtype head_glyph(const int dir[2]) {
 static void draw(Game *g, int highscore) {
     erase();
 
-    /* Border colour priority: a fresh eat flashes green, else armed hunt burns
-       red-orange. */
+    /* The board's border is white on every frame — an eat and an armed hunt no
+       longer move it off white. */
     WINDOW *board = derwin(stdscr, BOARD_H + 2, BOARD_W + 2, 1, 1);
-    int border_pair = 0;   /* 0 = default */
-    if (has_colors()) {
-        if (g->flash > 0) border_pair = 1;       /* green flash */
-        else if (g->hunt) border_pair = 3;       /* red-orange */
-        if (border_pair) attron(COLOR_PAIR(border_pair) | A_BOLD);
-    }
+    if (has_colors()) attron(COLOR_PAIR(2) | A_BOLD);
     box(board, 0, 0);
-    if (border_pair && has_colors()) attroff(COLOR_PAIR(border_pair) | A_BOLD);
+    if (has_colors()) attroff(COLOR_PAIR(2) | A_BOLD);
 
     mvprintw(0, 2, " tsnake ");
     attron(A_BOLD);

@@ -1485,12 +1485,9 @@ Item {
     ctx.fillStyle = Color.menu.selectedBackground.toString()
     ctx.fillRect(left, top, cell * bw, cell * bh)
 
-    // Border priority straight off draw(): flash outranks hunt; hunt is the
-    // red-orange AUTO HUNT warning; otherwise white.
-    var border = "#ffffff"
-    if (root.flash > 0) border = "#41d158"
-    else if (root.huntOn === 1) border = "#ff7043"
-    ctx.strokeStyle = border
+    // White on every frame — the eat flash and the armed-hunt warning no longer
+    // move the border off white.
+    ctx.strokeStyle = "#ffffff"
     // Capped, not merely proportional. The 0.16 ratio is the one that reads like
     // the terminal's solid border at an ordinary cell size; unbounded it was a
     // 35 px green slab at the 220 px cells the unsized board produced.

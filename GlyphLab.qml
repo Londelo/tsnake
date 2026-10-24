@@ -777,10 +777,10 @@ Item {
     ctx.textAlign = "right"
     ctx.fillText(badge, left + cell * cols, top - hud / 2)
 
-    // Floor + border, same priority as paintBoard: hunt armed burns red-orange.
+    // Floor + border, same rule as paintBoard: the border is always white.
     ctx.fillStyle = Color.menu.selectedBackground.toString()
     ctx.fillRect(left, top, cell * cols, cell * rows)
-    ctx.strokeStyle = lab.pick.hunt ? "#ff7043" : Color.menu.border.toString()
+    ctx.strokeStyle = "#ffffff"
     ctx.lineWidth = 2
     ctx.strokeRect(left + 1, top + 1, cell * cols - 2, cell * rows - 2)
 
