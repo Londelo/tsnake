@@ -152,6 +152,28 @@ take_the_removal_path() {
   REMOVED=1
 }
 
+# The shell's enabled flag is the only thing that puts a widget in the bar, and an install
+# path that leaves it false installs nothing anyone can see. It goes false on its own:
+# omarchy-plugin-remove sets it, and uninstall.sh calls that, so a folder that is already
+# gone at install time never had a chance to clear it back — the removal path above returns
+# early when $DEST is missing, REMOVED stays 0, and the gate that used to guard the enable
+# below never fired. The plugin came back registered and switched off: a bar with no button
+# in it and no error anywhere to say so.
+#
+# So the check is the shell's own answer, not a belief about what this script did. Only a
+# plugin the shell knows AND has switched off gets touched — a first install (not yet in the
+# index) and a plugin the player switched off himself both stay exactly as they are.
+ensure_enabled() {
+  local state
+  state="$(omarchy-shell shell listPlugins 2>/dev/null |
+    jq -r --arg id "$ID" '.[] | select(.id == $id) | .enabled' 2>/dev/null)" || state=""
+  [[ $state == "false" ]] || return 0
+  omarchy-plugin-enable "$ID" >/dev/null 2>&1 || true
+  omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
+  echo "enabled:         $ID was switched off — switched it back on"
+  return 0
+}
+
 # Build the whole folder OUTSIDE the watched tree, then move it in as one rename.
 #
 # Every create/close_write under ~/.config/omarchy/plugins is a reload request
@@ -188,6 +210,7 @@ already_installed() {
 
 if (( ! FRESH )) && already_installed; then
   echo "already installed, nothing written: $DEST"
+  ensure_enabled
   echo "then:  omarchy-shell shell summon $ID"
   exit 0
 fi
@@ -259,12 +282,8 @@ for f in snake BarWidget.qml GlyphLab.qml data/glyphs.json docs/decisions.md doc
 done
 cmp -s "$SRC/Overlay.qml" "$DEST/$ENTRY" || fail "installed overlay does not match the repo"
 
-if (( REMOVED )) && [[ $(omarchy-shell shell listPlugins 2>/dev/null |
-  jq -r --arg id "$ID" '.[] | select(.id == $id) | .enabled' 2>/dev/null) != "true" ]]; then
-  omarchy-plugin-enable "$ID" >/dev/null
-fi
-
 omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
+ensure_enabled
 
 echo "installed $ID -> $DEST"
 echo "  overlay entry: $ENTRY"
