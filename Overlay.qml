@@ -747,6 +747,10 @@ Item {
       anchors.centerIn: parent
       width: boardArea.width
       spacing: Style.spacing.md
+      // The intro screen owns the window until START, and it owns it alone: an
+      // invisible Column still reserves its children's heights, so the board would
+      // have to be off as a whole rather than cell by cell.
+      visible: root.gotFrame && !root.setupUp
 
       Item {
         id: hud
@@ -860,53 +864,52 @@ Item {
       }
     }
 
-    // The black screen is not empty-empty: while the engine builds and forks,
-    // SNAKE stands in blocky letters with a snake slithering down over the S,
-    // same language as the board. It retires the instant the
-    // first frame lands, and steps aside for the error panel if no frame ever
-    // does (the same gotFrame gate that holds the board back).
-    Canvas {
-      id: logoCanvas
-      anchors.centerIn: parent
-      visible: root.opened && !root.gotFrame && !root.engineFailed
-      // Sized to the window, not to a fixed block: the logo has to read as a
-      // snake from across the room, and a 420px stamp in a 1600px window reads
-      // as a smudge. Half the window's width, floor of eight pixels a cell.
-      readonly property int logoBlock: Math.max(5, Math.floor(parent.width * 0.55 / 110))
-      width: 110 * logoBlock
-      height: 56 * logoBlock
-      onPaint: root.paintLogo(logoCanvas)
-      onVisibleChanged: requestPaint()
-      onWidthChanged: requestPaint()
-    }
-
-    // Menu overlays live OUTSIDE the column, so a panel never resizes the
-    // board underneath it and reflows no cells mid-death.
+    // ---------------------------------------------------------------- intro screen
+    // SNAKE on top, the run's settings under it, START at the bottom. This is the
+    // whole window before the game exists: no board, and no card floating over a
+    // board. The engine is already forked behind the logo — it has to be, because
+    // WRAP and SPEED are the engine's to hold and to save (snake.c:save_setup) and
+    // a control that kept its own copy of them would be a second record. It simply
+    // will not advance an unstarted run, which is what makes START the moment the
+    // board appears rather than the moment the process does.
     //
-    // ---------------------------------------------------------------- setup card
-    // What this run IS, chosen before it begins: settings on top, START at the
-    // bottom. Wrap and speed live HERE and nowhere else — after START the engine
-    // refuses both (snake.c: `if (g->started) return 1;`), so a control that
-    // outlived the card would be claiming a power it no longer has. The snake sits
-    // on the board behind it, painted and still: the engine is ticking, it just will
-    // not advance an unstarted run, and the clicks that place food before the go
-    // signal are kept — placing a token is telling the AI where to eat, not steering.
-    Rectangle {
-      id: setupPanel
-      visible: root.setupUp
-      anchors.centerIn: parent        // see pausePanel: boardArea is not a valid anchor target
-      width: root.menuWidth(boardArea.width)
-      height: setupColumn.implicitHeight + root.cardPadding
-      radius: Style.cornerRadius
-      color: Color.menu.background.toString()
-      border.color: Color.menu.border.toString()
-      border.width: 1
+    // The logo stands alone while `make` runs and the engine forks, and the settings
+    // join it the tick the first frame lands: until that frame the numbers under the
+    // logo would be this overlay's placeholders, not the ones the player left.
+    Item {
+      id: introScreen
+      anchors.fill: parent
+      visible: root.opened && !root.engineFailed && !root.labMode
 
       Column {
-        id: setupColumn
         anchors.centerIn: parent
-        width: parent.width - Style.space(24)
-        spacing: Style.spacing.lg
+        width: Math.min(parent.width - Style.space(48), Style.space(620))
+        spacing: Style.spacing.xl
+
+        Item {
+          width: parent.width
+          height: logoCanvas.height
+          visible: !root.gotFrame || root.setupUp
+
+          // Sized to the window, not to a fixed block: the logo has to read as a
+          // snake from across the room, and a 420px stamp in a 1600px window reads
+          // as a smudge. Half the window's width, floor of eight pixels a cell.
+          Canvas {
+            id: logoCanvas
+            anchors.centerIn: parent
+            readonly property int logoBlock: Math.max(5, Math.floor(introScreen.width * 0.55 / 110))
+            width: 110 * logoBlock
+            height: 56 * logoBlock
+            onPaint: root.paintLogo(logoCanvas)
+            onVisibleChanged: requestPaint()
+            onWidthChanged: requestPaint()
+          }
+        }
+
+        Column {
+          visible: root.setupUp
+          width: parent.width
+          spacing: Style.spacing.lg
 
         Text {
           textFormat: Text.PlainText
@@ -1039,7 +1042,7 @@ Item {
           }
         }
 
-        // START — the bottom of the card, and the only thing that gets the snake
+        // START — the bottom of the screen, and the only thing that gets the snake
         // moving. Mouse on purpose: this is a decision, not a key to mash past.
         Button {
           id: startButton
@@ -1050,11 +1053,24 @@ Item {
           horizontalPadding: Style.space(30)
           onClicked: root.startRun()
         }
-        // No key hint under the button: the help row under the board already names
-        // `q quit` for this state, and saying it twice in one window is noise.
+
+        // The board's help row goes off this screen with the board, and `q` is the
+        // one key that answers here.
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          textFormat: Text.PlainText
+          text: "set wrap and speed, then START   ·   q quit"
+          color: Color.menu.text.toString()
+          opacity: 0.65
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.body
+        }
       }
     }
+  }
 
+    // Menu overlays live OUTSIDE the intro screen, so a panel never moves the
+    // controls under it and reflows nothing mid-death.
     Rectangle {
       id: pausePanel
       visible: root.opened && root.alive === 1 && root.paused === 1

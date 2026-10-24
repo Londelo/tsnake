@@ -104,6 +104,7 @@ export HOME="$HOME_REAL"
 
 PLUGINS_DIR="${TSNAKE_PLUGINS_DIR:-$HOME_REAL/.config/omarchy/plugins}"
 MENU_DIR="${XDG_CONFIG_HOME:-$HOME_REAL/.config}/omarchy/extensions"
+MENU_FILE="$MENU_DIR/omarchy-menu.jsonc"
 # The copy install.sh shipped beside the plugin, and the only thing that can prove a menu
 # file is tsnake's own. Compared byte for byte, never name-matched: a file whose first line
 # merely mentions tsnake is somebody else's file with one tsnake row in it.
