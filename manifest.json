@@ -3,6 +3,7 @@
   "id": "io.github.londelo.tsnake",
   "name": "tsnake",
   "version": "0.1.0",
+  "author": "Brodie Balser",
   "description": "Terminal snake, playable as an Omarchy overlay.",
   "keepLoaded": false,
   "kinds": [
